@@ -1,0 +1,23 @@
+{
+  "name": "hello01",
+  "description": "testing vue",
+  "version": "1.0.0",
+  "author": "ankush <ankush@clevertap.com>",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "node test.mjs"
+  },
+  "dependencies": {
+    "@puppeteer/replay": "^2.7.1",
+    "puppeteer": "^19.4.1"
+  },
+  "browserslist": [
+    "> 1%",
+    "last 2 versions",
+    "not ie <= 8"
+  ],
+  "devDependencies": {
+  }
+}
+
