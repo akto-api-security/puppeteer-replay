@@ -16,10 +16,12 @@ async function runReplay(replayJSON, command) {
     headless: true,
     args: ['--no-sandbox']
   });
-  
   const tokenMap = {};
   
   const page = await browser.newPage();
+  const ua =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
+  await page.setUserAgent(ua);
   
   page.setDefaultNavigationTimeout(20000);
   var output = "{}";
@@ -58,9 +60,17 @@ async function runReplay(replayJSON, command) {
       const href = await page.evaluate(() =>  window.location.href);
   
       page.evaluate((x) => cookieMap = x, tokenMap);
+
+//      console.log(cookieMap)
+
+      console.log("command")
+
+      console.log(command)
   
       const localStorageValues = await page.evaluate((x) => eval(x), command);
   
+      console.log(localStorageValues)
+
       var token = String(localStorageValues)
       var createdAt = Math.floor(Date.now()/1000)
       output = `{"token": "${token}", "created_at": ${createdAt}}`
