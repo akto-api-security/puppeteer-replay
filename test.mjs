@@ -27,6 +27,33 @@ async function runReplay(replayJSON, command) {
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
+      switch(step.type){
+        case "click":
+        case "change":
+          if(step?.checkSelector !== undefined){
+            let element = null
+            try {
+              element = await page.$(step.selectors[0][0]);
+            } catch (error) {
+              element = null
+            }
+            if(!element){
+              step.type = "click"
+              step.selectors =  [
+                    [
+                        "#lblTop"
+                    ]
+                ]
+                ,
+                step.offsetY = 10
+                step.offsetX = 146                
+              return;
+            }
+          }
+          break;
+        default:
+          break;
+      }
       await super.beforeEachStep(step, flow);
     }
   
@@ -54,19 +81,16 @@ async function runReplay(replayJSON, command) {
   
     async afterAllSteps(flow) {
       await super.afterAllSteps(flow);
-      
-      await page.waitForNavigation({waitUntil: 'networkidle0'})
-      
       const href = await page.evaluate(() =>  window.location.href);
   
       page.evaluate((x) => cookieMap = x, tokenMap);
-
-//      console.log(cookieMap)
-
-      console.log("command")
-
-      console.log(command)
-  
+      let useCommand = ""
+      if(command == null || command.length === 0 || command === "default"){
+        useCommand = "Object.entries(cookieMap).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('; ')"
+      }else{
+        useCommand = command;
+      }
+      console.log("hii", useCommand)
       const localStorageValues = await page.evaluate((x) => eval(x), command);
   
       console.log(localStorageValues)
@@ -74,7 +98,6 @@ async function runReplay(replayJSON, command) {
       var token = String(localStorageValues)
       var createdAt = Math.floor(Date.now()/1000)
       output = `{"token": "${token}", "created_at": ${createdAt}}`
-    
       await browser.close();
     }
   }
