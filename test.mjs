@@ -90,8 +90,7 @@ async function runReplay(replayJSON, command) {
       }else{
         useCommand = command;
       }
-      console.log("hii", useCommand)
-      const localStorageValues = await page.evaluate((x) => eval(x), command);
+      const localStorageValues = await page.evaluate((x) => eval(x), useCommand);
   
       console.log(localStorageValues)
 
