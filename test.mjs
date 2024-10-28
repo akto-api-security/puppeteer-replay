@@ -23,7 +23,7 @@ async function runReplay(replayJSON, command) {
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
   await page.setUserAgent(ua);
   
-  page.setDefaultNavigationTimeout(20000);
+  page.setDefaultNavigationTimeout(100000);
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
@@ -59,9 +59,9 @@ async function runReplay(replayJSON, command) {
       
       const href = await page.evaluate(() =>  window.location.href);
   
-      page.evaluate((x) => cookieMap = x, tokenMap);
+      console.log(tokenMap)
 
-//      console.log(cookieMap)
+      page.evaluate((x) => cookieMap = x, tokenMap);
 
       console.log("command")
 
