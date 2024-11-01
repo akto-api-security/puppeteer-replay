@@ -23,7 +23,7 @@ async function runReplay(replayJSON, command) {
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
   await page.setUserAgent(ua);
   
-  page.setDefaultNavigationTimeout(20000);
+  //page.setDefaultNavigationTimeout(200000);
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
@@ -35,6 +35,8 @@ async function runReplay(replayJSON, command) {
             try {
               element = await page.$(step.selectors[0][0]);
             } catch (error) {
+              console.log("error while finding selector");
+              console.log(error);
               element = null
             }
             if(!element){
@@ -59,6 +61,11 @@ async function runReplay(replayJSON, command) {
   
     async afterEachStep(step, flow) {
       await super.afterEachStep(step, flow);
+
+      console.log(JSON.stringify(step));
+      
+      console.log("taking screenshot");
+      await page.screenshot({ path: `screenshot-${Date.now()}.png` });
   
       let pages = await browser.pages()
       pages.forEach(_page => {
