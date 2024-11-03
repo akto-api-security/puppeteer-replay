@@ -13,7 +13,7 @@ async function runReplay(replayJSON, command) {
   var bodyObj = JSON.parse(body);
   
   const browser = await puppeteer.launch({
-    headless: true,
+    headless: false,
     args: ['--no-sandbox']
   });
   
@@ -25,9 +25,56 @@ async function runReplay(replayJSON, command) {
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
+      console.log("step", step, typeof step)
+      switch(step.type){
+        case "click":
+        case "change":
+          if(step?.checkSelector !== undefined){
+            let element = null
+            try {
+              console.log("step.selectors: ", step.selectors)
+              let ansElem = step.selectors[0][0];
+              let quesElem = ansElem.replaceAll("tbxKBA", "lblKBQ");
+              console.log("questionElemSelector: ", quesElem)
+
+              element = await page.$(quesElem);
+              console.log("questionElem: ", element)
+              const answer = await page.evaluate(el => {
+                const text = el.textContent.trim();
+                const words = text.replace(/[?.,!]*$/, '').split(' ');
+                return words[words.length - 1];
+              }, element);
+
+              step.value = answer
+              console.log("step value answer: ", answer)
+              element = await page.$(ansElem);
+            } catch (error) {
+              element = null
+            }
+
+            
+
+            console.log("element", element)
+            if(!element){
+              step.type = "click"
+              step.selectors =  [
+                    [
+                        "#lblTop"
+                    ]
+                ]
+                ,
+                step.offsetY = 10
+                step.offsetX = 146                
+              return;
+            }
+          }
+          break;
+        default:
+          break;
+      }
       await super.beforeEachStep(step, flow);
     }
-  
+
     async afterEachStep(step, flow) {
       await super.afterEachStep(step, flow);
   
@@ -53,7 +100,6 @@ async function runReplay(replayJSON, command) {
     async afterAllSteps(flow) {
       await super.afterAllSteps(flow);
       
-      await page.waitForNavigation({waitUntil: 'networkidle0'})
       
       const href = await page.evaluate(() =>  window.location.href);
   
@@ -62,6 +108,8 @@ async function runReplay(replayJSON, command) {
       const localStorageValues = await page.evaluate((x) => eval(x), command);
   
       var token = String(localStorageValues)
+      // console.log("cookieMap: ", cookieMap)
+      console.log("tokenMap: ", tokenMap)
       var createdAt = Math.floor(Date.now()/1000)
       output = `{"token": "${token}", "created_at": ${createdAt}}`
     
@@ -79,6 +127,29 @@ async function runReplay(replayJSON, command) {
 
   return output;
 }
+
+
+
+
+// const path = '/Users/ankushjain/Downloads/insperity-3 (1).json';
+
+// fs.readFile(path, 'utf8', (err, data) => {
+//   if (err) {
+//     console.error('Error reading the file:', err);
+//     return;
+//   }
+//   try {
+//     runReplay(data, "Object.entries(cookieMap).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('; ');")
+//     .then(x => {
+//       console.log(x)
+//     })
+    
+//   } catch (parseErr) {
+//     console.error('Error parsing JSON:', parseErr);
+//   }
+// });
+
+
 
 
 const server = http.createServer(async (req, res) => {
@@ -109,5 +180,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`Server running on http://localhost:${port}/`);
 });
+
 
 
