@@ -12,20 +12,86 @@ async function runReplay(replayJSON, command) {
   
   var bodyObj = JSON.parse(body);
   
+  console.log("parsed body: ", bodyObj)
+
   const browser = await puppeteer.launch({
-    headless: false,
-    args: ['--no-sandbox']
+    headless: true,
+    dumpio: true,
+    args: ['--no-sandbox', "--disable-gpu"]
   });
   
+  console.log("browser launched: ", bodyObj)
+
   const tokenMap = {};
   
   const page = await browser.newPage();
-  
-  page.setDefaultNavigationTimeout(20000);
+  await page.setRequestInterception(true);
+
+  console.log("new page started: ", page)
+
+  page.setDefaultNavigationTimeout(200000);
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
-      console.log("step", step, typeof step)
+      console.log("step", step, typeof step, +Date.now())
+      if (step.requests) {
+        let extractorList = step.requests
+
+        page.on("request", (request) => {
+          // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
+          console.log ("request.method(): ", request.method(), request.url())
+          if (request.resourceType() === "xhr" && request.method() !== "OPTIONS") {
+            // Capture some XHR request data and log it to the console
+            extractorList.forEach(async (ex) => {
+              if (new RegExp(ex.urlRegex).test(request.url())) {
+                console.log("url matches: ", request.url())
+                switch (ex.position) {
+                  case "header": 
+                    console.log("kv pair: ", ex.saveAs, JSON.stringify(request.headers()))
+                    let headerVal = request.headers()[ex.name]
+                    if (!!headerVal) {
+                      let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
+                      console.log("command: ", command)
+                      await page.evaluate((x) => eval(x), command)
+                    }
+                    break;
+                  case "payload":
+                    let kvPairsStr = request.postData().split("&")
+                    for (let index = 0; index < kvPairsStr.length; index++) {
+                      const kvStr = kvPairsStr[index];
+                      const [key, value] = kvStr.split("=");
+                      console.log("key, value pair: ", key, value)
+
+                      if (key === ex.name && !!value) {
+                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                        console.log("command: ", command)
+                        await page.evaluate((x) => eval(x), command)
+                      }
+                    }
+                    break;
+                  case "query": 
+                    
+                    break;
+                }
+              }
+            })
+            // console.log("XHR Request", request.method(), request.url());
+            // console.log("Headers", request.headers());
+            // console.log("Post Data", request.postData());
+          }
+      
+          // Allow the request to be sent
+          request.continue();
+        })
+
+        page.on("response", (response) => {
+          const request = response.request();
+          if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
+            console.log("Response Body", request.method(), request.url());
+          }
+        })
+      }
+
       switch(step.type){
         case "click":
         case "change":
@@ -70,8 +136,10 @@ async function runReplay(replayJSON, command) {
           }
           break;
         default:
+          
           break;
       }
+      await page.screenshot();
       await super.beforeEachStep(step, flow);
     }
 
@@ -95,35 +163,42 @@ async function runReplay(replayJSON, command) {
         
         
       })
+      console.log("after step: ", +Date.now())
     }
   
     async afterAllSteps(flow) {
       await super.afterAllSteps(flow);
       
-      
-      const href = await page.evaluate(() =>  window.location.href);
-  
+      try {
+        const href = await page.evaluate(() =>  window.location.href);
+        await page.waitForNetworkIdle()
+      } catch (err) {
+        console.log("error in waitForNetworkIdle: ", err)
+      } 
+
       page.evaluate((x) => cookieMap = x, tokenMap);
   
       const localStorageValues = await page.evaluate((x) => eval(x), command);
-  
+      const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
       var token = String(localStorageValues)
       // console.log("cookieMap: ", cookieMap)
       console.log("tokenMap: ", tokenMap)
       var createdAt = Math.floor(Date.now()/1000)
-      output = `{"token": "${token}", "created_at": ${createdAt}}`
-    
+      var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput}
+
+      output = JSON.stringify(outputObj)
       await browser.close();
     }
   }
     
   const runner = await createRunner(
     bodyObj,
-    new Extension(browser, page, 7000)
+    new Extension(browser, page, 200000)
   );
   
   await runner.run();
-  
+  console.log("runner started: ")
+
 
   return output;
 }
@@ -165,7 +240,7 @@ const server = http.createServer(async (req, res) => {
       try {
         
         let dataObj = JSON.parse(body)
-        // console.log(dataObj);
+        console.log(dataObj);
         const msg = await runReplay(dataObj.replayJson, dataObj.command);
         res.writeHead(200, {'Content-Type': 'application/json'});
         res.end(msg);
