@@ -56,6 +56,8 @@ async function runReplay(replayJSON, command) {
                     }
                     break;
                   case "payload":
+                    if (!request.postData() || request.postData().length == 0) 
+                      break;
                     let kvPairsStr = request.postData().split("&")
                     for (let index = 0; index < kvPairsStr.length; index++) {
                       const kvStr = kvPairsStr[index];
