@@ -70,7 +70,21 @@ async function runReplay(replayJSON, command) {
                     }
                     break;
                   case "query": 
-                    
+                    let queryParams = request.url().split("?")
+                    if (queryParams.length < 2) break;
+
+                    let querykvPairsStr = queryParams[1].split("&")
+                    for (let index = 0; index < querykvPairsStr.length; index++) {
+                      const kvStr = querykvPairsStr[index];
+                      const [key, value] = kvStr.split("=");
+                      console.log("key, value pair: ", key, value)
+
+                      if (key === ex.name && !!value) {
+                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                        console.log("command: ", command)
+                        await page.evaluate((x) => eval(x), command)
+                      }
+                    }
                     break;
                 }
               }
