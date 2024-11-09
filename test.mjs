@@ -193,6 +193,12 @@ async function runReplay(replayJSON, command) {
       } 
 
       page.evaluate((x) => cookieMap = x, tokenMap);
+
+//      console.log(cookieMap)
+
+      console.log("command")
+
+      console.log(command)
   
       const localStorageValues = await page.evaluate((x) => eval(x), command);
       const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
