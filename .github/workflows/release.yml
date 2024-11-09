@@ -13,6 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
+      - name: Setup Node
+        uses: actions/setup-node@v2
+        with:
+          node-version: '17'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npm run test -- --silent
+
       - name: Add version.txt
         run: echo ${{ github.event.inputs.release_version }} > version.txt
 
