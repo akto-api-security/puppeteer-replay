@@ -6,6 +6,7 @@ import fs from 'fs'
 import * as http from 'http';
 
 const port = process.env.PORT || 3000;
+const debugMode = process.env.DEBUG_MODE === "true"
 
 async function runReplay(replayJSON, command) {  
   var body = replayJSON
@@ -179,6 +180,20 @@ async function runReplay(replayJSON, command) {
         
         
       })
+
+      if(debugMode){
+        try {
+            const timestamp = Date.now();
+            const screenshotPath = `step-${step?.value || 'unknown'}-${timestamp}.png`
+            await page.screenshot({
+              path: screenshotPath,
+            });
+            await pages[0].screenshot({ path: screenshotPath });
+            console.log(`Screenshot saved: ${screenshotPath}`);
+        } catch (error) {
+            console.error('Error capturing screenshot:', error);
+        }
+      }
       console.log("after step: ", +Date.now())
     }
   
