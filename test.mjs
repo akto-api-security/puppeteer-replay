@@ -157,7 +157,7 @@ async function runReplay(replayJSON, command) {
           
           break;
       }
-      await page.screenshot();
+      await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
       await super.beforeEachStep(step, flow);
     }
 
