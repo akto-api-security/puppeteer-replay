@@ -25,7 +25,6 @@ async function runReplay(replayJSON, command) {
   const tokenMap = {};
   
   const page = await browser.newPage();
-  await page.setRequestInterception(true);
 
   console.log("new page started: ", page)
 
@@ -40,7 +39,7 @@ async function runReplay(replayJSON, command) {
         page.on("request", (request) => {
           // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
           console.log ("request.method(): ", request.method(), request.url())
-          if (request.resourceType() === "xhr" && request.method() !== "OPTIONS") {
+          if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
             // Capture some XHR request data and log it to the console
             extractorList.forEach(async (ex) => {
               if (new RegExp(ex.urlRegex).test(request.url())) {
@@ -106,6 +105,9 @@ async function runReplay(replayJSON, command) {
             console.log("Response Body", request.method(), request.url());
           }
         })
+
+        await page.setRequestInterception(true);
+        
       }
 
       switch(step.type){
