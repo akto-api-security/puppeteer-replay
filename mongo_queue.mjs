@@ -3,10 +3,9 @@ dotenv.config();
 
 import { MongoClient } from 'mongodb';
 
-const connectionString = process.env.MONGO_CONNECTION_STRING;
-
-const dbName = process.env.MONGO_DB_NAME;
-const collectionName = process.env.MONGO_COLLECTION_NAME;
+const connectionString = process.env.MONGO_CONNECTION_STRING || 'mongodb://localhost:27017';
+const dbName = process.env.MONGO_DB_NAME || '1000000';
+const collectionName = process.env.MONGO_COLLECTION_NAME || 'logs_puppeteer';
 
 class MongoQueue {
     constructor(batchSize = 10) {

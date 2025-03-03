@@ -28,11 +28,9 @@ function printAndAddLog(log, key = "info", shouldSave = true) {
 
 function stringify(obj) {
   try {
-    if (obj === null || typeof obj === "undefined") return "undefined";
-    if (typeof obj !== "object" && typeof obj !== "string") return String(obj);
-    return JSON.stringify(obj) || "undefined";
+    return JSON.stringify(obj);
   } catch (err) {
-    return "undefined"; 
+    return err.message || "Could not stringify object"; 
   }
 }
 
