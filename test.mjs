@@ -4,15 +4,42 @@ import puppeteer from 'puppeteer';
 import fs from 'fs'
 
 import * as http from 'http';
+import MongoQueue from './mongo_queue.mjs';
 
 const port = process.env.PORT || 3000;
+
+let mongoQueue = null;
+
+function printAndAddLog(log, key = "info", shouldSave = true) {
+  console.log(log);
+  if (shouldSave && mongoQueue) {
+    mongoQueue.addLogToQueue({
+      log,
+      timestamp: parseInt(new Date().getTime()/1000),
+      key
+  }).then(() => {
+    // do nothing
+
+    }).catch((err) => {
+      console.error(err)
+    });
+  }
+}
+
+function stringify(obj) {
+  try {
+    return JSON.stringify(obj);
+  } catch (err) {
+    return err.message || "Could not stringify object"; 
+  }
+}
 
 async function runReplay(replayJSON, command) {  
   var body = replayJSON
   
   var bodyObj = JSON.parse(body);
   
-  console.log("parsed body: ", bodyObj)
+  printAndAddLog("parsed body: " + body)
 
   const browser = await puppeteer.launch({
     headless: true,
@@ -20,37 +47,37 @@ async function runReplay(replayJSON, command) {
     args: ['--no-sandbox', "--disable-gpu"]
   });
   
-  console.log("browser launched: ", bodyObj)
+  printAndAddLog("browser launched: " + body, "info", false)
 
   const tokenMap = {};
   
   const page = await browser.newPage();
 
-  console.log("new page started: ", page)
+  printAndAddLog("new page started: " + page, "info", false)
 
   page.setDefaultNavigationTimeout(200000);
   var output = "{}";
   class Extension extends PuppeteerRunnerExtension {
     async beforeEachStep(step, flow) {
-      console.log("step", step, typeof step, +Date.now())
+      printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
       if (step.requests) {
         let extractorList = step.requests
 
         page.on("request", (request) => {
           // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
-          console.log ("request.method(): ", request.method(), request.url())
+          printAndAddLog("request.method(): " + request.method() + " " + request.url())
           if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
             // Capture some XHR request data and log it to the console
             extractorList.forEach(async (ex) => {
               if (new RegExp(ex.urlRegex).test(request.url())) {
-                console.log("url matches: ", request.url())
+                printAndAddLog("url matches: " + request.url())
                 switch (ex.position) {
                   case "header": 
-                    console.log("kv pair: ", ex.saveAs, JSON.stringify(request.headers()))
+                    printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
                     let headerVal = request.headers()[ex.name]
                     if (!!headerVal) {
                       let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
-                      console.log("command: ", command)
+                      printAndAddLog("command: " + command)
                       await page.evaluate((x) => eval(x), command)
                     }
                     break;
@@ -61,11 +88,10 @@ async function runReplay(replayJSON, command) {
                     for (let index = 0; index < kvPairsStr.length; index++) {
                       const kvStr = kvPairsStr[index];
                       const [key, value] = kvStr.split("=");
-                      console.log("key, value pair: ", key, value)
-
+                      printAndAddLog("key, value pair: " + key + " " + value)
                       if (key === ex.name && !!value) {
                         let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                        console.log("command: ", command)
+                        printAndAddLog("command: " + command)
                         await page.evaluate((x) => eval(x), command)
                       }
                     }
@@ -78,11 +104,10 @@ async function runReplay(replayJSON, command) {
                     for (let index = 0; index < querykvPairsStr.length; index++) {
                       const kvStr = querykvPairsStr[index];
                       const [key, value] = kvStr.split("=");
-                      console.log("key, value pair: ", key, value)
-
+                      printAndAddLog("key, value pair: " + key + " " + value)  
                       if (key === ex.name && !!value) {
                         let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                        console.log("command: ", command)
+                        printAndAddLog("command: " + command)
                         await page.evaluate((x) => eval(x), command)
                       }
                     }
@@ -102,7 +127,7 @@ async function runReplay(replayJSON, command) {
         page.on("response", (response) => {
           const request = response.request();
           if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
-            console.log("Response Body", request.method(), request.url());
+            printAndAddLog("Response Body: " + request.method() + " " + request.url())
           }
         })
 
@@ -116,13 +141,12 @@ async function runReplay(replayJSON, command) {
           if(step?.checkSelector !== undefined){
             let element = null
             try {
-              console.log("step.selectors: ", step.selectors)
+              printAndAddLog("step.selectors: " + stringify(step.selectors))
               let ansElem = step.selectors[0][0];
               let quesElem = ansElem.replaceAll("tbxKBA", "lblKBQ");
-              console.log("questionElemSelector: ", quesElem)
-
+              printAndAddLog("questionElemSelector: " + quesElem)
               element = await page.$(quesElem);
-              console.log("questionElem: ", element)
+              printAndAddLog("questionElem: " + element)
               const answer = await page.evaluate(el => {
                 const text = el.textContent.trim();
                 const words = text.replace(/[?.,!]*$/, '').split(' ');
@@ -130,7 +154,7 @@ async function runReplay(replayJSON, command) {
               }, element);
 
               step.value = answer
-              console.log("step value answer: ", answer)
+              printAndAddLog("step value answer: " + answer)
               element = await page.$(ansElem);
             } catch (error) {
               element = null
@@ -138,7 +162,7 @@ async function runReplay(replayJSON, command) {
 
             
 
-            console.log("element", element)
+            printAndAddLog("element: " + stringify(element))
             if(!element){
               step.type = "click"
               step.selectors =  [
@@ -181,7 +205,7 @@ async function runReplay(replayJSON, command) {
         
         
       })
-      console.log("after step: ", +Date.now())
+      printAndAddLog("after step: " + +Date.now())
     }
   
     async afterAllSteps(flow) {
@@ -191,27 +215,22 @@ async function runReplay(replayJSON, command) {
         const href = await page.evaluate(() =>  window.location.href);
         await page.waitForNetworkIdle()
       } catch (err) {
-        console.log("error in waitForNetworkIdle: ", err)
+        printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
       } 
 
       page.evaluate((x) => cookieMap = x, tokenMap);
 
-//      console.log(cookieMap)
-
-      console.log("command")
-
-      console.log(command)
+      printAndAddLog("command: " + command)
   
       const localStorageValues = await page.evaluate((x) => eval(x), command);
       const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
       var token = String(localStorageValues)
-      // console.log("cookieMap: ", cookieMap)
-      console.log("tokenMap: ", tokenMap)
+      printAndAddLog("tokenMap: " + stringify(tokenMap))
       var createdAt = Math.floor(Date.now()/1000)
       var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput}
 
-      output = JSON.stringify(outputObj)
-      await browser.close();
+      output = stringify(outputObj)
+      await browser.close();  
     }
   }
     
@@ -221,7 +240,7 @@ async function runReplay(replayJSON, command) {
   );
   
   await runner.run();
-  console.log("runner started: ")
+  printAndAddLog("runner started: ", "info", false)
 
 
   return output;
@@ -264,21 +283,30 @@ const server = http.createServer(async (req, res) => {
       try {
         
         let dataObj = JSON.parse(body)
-        console.log(dataObj);
+        printAndAddLog("dataObj: " + stringify(dataObj))
         const msg = await runReplay(dataObj.replayJson, dataObj.command);
         res.writeHead(200, {'Content-Type': 'application/json'});
+        if (mongoQueue) {
+          mongoQueue.flushRemaining();
+        }
         res.end(msg);
       } catch (err) {
-        console.log(err)
+        printAndAddLog("error: " + err, "error")
         res.writeHead(400, {"Content-type": "text/plain"});
         res.end("Bad request")
       }    
     });
 });
 
-server.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}/`);
-});
+try {
+  mongoQueue = new MongoQueue();
+  await mongoQueue.connect();
+} catch (err) {
+  console.error(err)
+}
 
+server.listen(port, () => {
+  printAndAddLog(`server running on http://localhost:${port}/`, "info", false)
+});
 
 
