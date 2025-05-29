@@ -35,215 +35,225 @@ function stringify(obj) {
 }
 
 async function runReplay(replayJSON, command) {  
-  var body = replayJSON
-  
-  var bodyObj = JSON.parse(body);
-  
-  printAndAddLog("parsed body: " + body)
+  let browser = null;
+  try {
+    var body = replayJSON
+    var bodyObj = JSON.parse(body);
+    
+    printAndAddLog("parsed body: " + body)
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    dumpio: true,
-    args: ['--no-sandbox', "--disable-gpu"]
-  });
-  
-  printAndAddLog("browser launched: " + body, "info", false)
+    browser = await puppeteer.launch({
+      headless: true,
+      dumpio: true,
+      args: ['--no-sandbox', "--disable-gpu"]
+    });
+    
+    printAndAddLog("browser launched: " + body, "info", false)
 
-  const tokenMap = {};
-  
-  const page = await browser.newPage();
+    const tokenMap = {};
+    const page = await browser.newPage();
+    printAndAddLog("new page started: " + page, "info", false)
 
-  printAndAddLog("new page started: " + page, "info", false)
+    page.setDefaultNavigationTimeout(200000);
+    var output = "{}";
+    class Extension extends PuppeteerRunnerExtension {
+      async beforeEachStep(step, flow) {
+        printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
+        if (step.requests) {
+          let extractorList = step.requests
 
-  page.setDefaultNavigationTimeout(200000);
-  var output = "{}";
-  class Extension extends PuppeteerRunnerExtension {
-    async beforeEachStep(step, flow) {
-      printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
-      if (step.requests) {
-        let extractorList = step.requests
-
-        page.on("request", (request) => {
-          // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
-          printAndAddLog("request.method(): " + request.method() + " " + request.url())
-          if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
-            // Capture some XHR request data and log it to the console
-            extractorList.forEach(async (ex) => {
-              if (new RegExp(ex.urlRegex).test(request.url())) {
-                printAndAddLog("url matches: " + request.url())
-                switch (ex.position) {
-                  case "header": 
-                    printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
-                    let headerVal = request.headers()[ex.name]
-                    if (!!headerVal) {
-                      let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
-                      printAndAddLog("command: " + command)
-                      await page.evaluate((x) => eval(x), command)
-                    }
-                    break;
-                  case "payload":
-                    if (!request.postData() || request.postData().length == 0) 
+          page.on("request", (request) => {
+            // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
+            printAndAddLog("request.method(): " + request.method() + " " + request.url())
+            if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
+              // Capture some XHR request data and log it to the console
+              extractorList.forEach(async (ex) => {
+                if (new RegExp(ex.urlRegex).test(request.url())) {
+                  printAndAddLog("url matches: " + request.url())
+                  switch (ex.position) {
+                    case "header": 
+                      printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
+                      let headerVal = request.headers()[ex.name]
+                      if (!!headerVal) {
+                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
+                        printAndAddLog("command: " + command)
+                        await page.evaluate((x) => eval(x), command)
+                      }
                       break;
-                    let kvPairsStr = request.postData().split("&")
-                    for (let index = 0; index < kvPairsStr.length; index++) {
-                      const kvStr = kvPairsStr[index];
-                      const [key, value] = kvStr.split("=");
-                      printAndAddLog("key, value pair: " + key + " " + value)
-                      if (key === ex.name && !!value) {
-                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                        printAndAddLog("command: " + command)
-                        await page.evaluate((x) => eval(x), command)
+                    case "payload":
+                      if (!request.postData() || request.postData().length == 0) 
+                        break;
+                      let kvPairsStr = request.postData().split("&")
+                      for (let index = 0; index < kvPairsStr.length; index++) {
+                        const kvStr = kvPairsStr[index];
+                        const [key, value] = kvStr.split("=");
+                        printAndAddLog("key, value pair: " + key + " " + value)
+                        if (key === ex.name && !!value) {
+                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                          printAndAddLog("command: " + command)
+                          await page.evaluate((x) => eval(x), command)
+                        }
                       }
-                    }
-                    break;
-                  case "query": 
-                    let queryParams = request.url().split("?")
-                    if (queryParams.length < 2) break;
+                      break;
+                    case "query": 
+                      let queryParams = request.url().split("?")
+                      if (queryParams.length < 2) break;
 
-                    let querykvPairsStr = queryParams[1].split("&")
-                    for (let index = 0; index < querykvPairsStr.length; index++) {
-                      const kvStr = querykvPairsStr[index];
-                      const [key, value] = kvStr.split("=");
-                      printAndAddLog("key, value pair: " + key + " " + value)  
-                      if (key === ex.name && !!value) {
-                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                        printAndAddLog("command: " + command)
-                        await page.evaluate((x) => eval(x), command)
+                      let querykvPairsStr = queryParams[1].split("&")
+                      for (let index = 0; index < querykvPairsStr.length; index++) {
+                        const kvStr = querykvPairsStr[index];
+                        const [key, value] = kvStr.split("=");
+                        printAndAddLog("key, value pair: " + key + " " + value)  
+                        if (key === ex.name && !!value) {
+                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                          printAndAddLog("command: " + command)
+                          await page.evaluate((x) => eval(x), command)
+                        }
                       }
-                    }
-                    break;
+                      break;
+                  }
                 }
-              }
-            })
-            // console.log("XHR Request", request.method(), request.url());
-            // console.log("Headers", request.headers());
-            // console.log("Post Data", request.postData());
-          }
-      
-          // Allow the request to be sent
-          request.continue();
-        })
-
-        page.on("response", (response) => {
-          const request = response.request();
-          if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
-            printAndAddLog("Response Body: " + request.method() + " " + request.url())
-          }
-        })
-
-        await page.setRequestInterception(true);
+              })
+              // console.log("XHR Request", request.method(), request.url());
+              // console.log("Headers", request.headers());
+              // console.log("Post Data", request.postData());
+            }
         
-      }
+            // Allow the request to be sent
+            request.continue();
+          })
 
-      switch(step.type){
-        case "click":
-        case "change":
-          if(step?.checkSelector !== undefined){
-            let element = null
-            try {
-              printAndAddLog("step.selectors: " + stringify(step.selectors))
-              let ansElem = step.selectors[0][0];
-              let quesElem = ansElem.replaceAll("tbxKBA", "lblKBQ");
-              printAndAddLog("questionElemSelector: " + quesElem)
-              element = await page.$(quesElem);
-              printAndAddLog("questionElem: " + element)
-              const answer = await page.evaluate(el => {
-                const text = el.textContent.trim();
-                const words = text.replace(/[?.,!]*$/, '').split(' ');
-                return words[words.length - 1];
-              }, element);
-
-              step.value = answer
-              printAndAddLog("step value answer: " + answer)
-              element = await page.$(ansElem);
-            } catch (error) {
-              element = null
+          page.on("response", (response) => {
+            const request = response.request();
+            if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
+              printAndAddLog("Response Body: " + request.method() + " " + request.url())
             }
+          })
 
-            
-
-            printAndAddLog("element: " + stringify(element))
-            if(!element){
-              step.type = "click"
-              step.selectors =  [
-                    [
-                        "#lblTop"
-                    ]
-                ]
-                ,
-                step.offsetY = 10
-                step.offsetX = 146                
-              return;
-            }
-          }
-          break;
-        default:
+          await page.setRequestInterception(true);
           
-          break;
-      }
-      await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
-      await super.beforeEachStep(step, flow);
-    }
+        }
 
-    async afterEachStep(step, flow) {
-      await super.afterEachStep(step, flow);
-  
-      let pages = await browser.pages()
-      pages.forEach(_page => {
-        _page.on("response", async resp => {
-          var headers = resp.headers()
-          for (let key in headers) {
-            if (key === 'set-cookie') {
-              var tokenObj = headers[key].split(';')[0]
-              var tokenKey = tokenObj.split('=')[0]
-              var tokenVal = tokenObj.split('=')[1]
-              tokenMap[tokenKey] = tokenVal
+        switch(step.type){
+          case "click":
+          case "change":
+            if(step?.checkSelector !== undefined){
+              let element = null
+              try {
+                printAndAddLog("step.selectors: " + stringify(step.selectors))
+                let ansElem = step.selectors[0][0];
+                let quesElem = ansElem.replaceAll("tbxKBA", "lblKBQ");
+                printAndAddLog("questionElemSelector: " + quesElem)
+                element = await page.$(quesElem);
+                printAndAddLog("questionElem: " + element)
+                const answer = await page.evaluate(el => {
+                  const text = el.textContent.trim();
+                  const words = text.replace(/[?.,!]*$/, '').split(' ');
+                  return words[words.length - 1];
+                }, element);
+
+                step.value = answer
+                printAndAddLog("step value answer: " + answer)
+                element = await page.$(ansElem);
+              } catch (error) {
+                element = null
+              }
+
+              
+
+              printAndAddLog("element: " + stringify(element))
+              if(!element){
+                step.type = "click"
+                step.selectors =  [
+                      [
+                          "#lblTop"
+                      ]
+                  ]
+                  ,
+                  step.offsetY = 10
+                  step.offsetX = 146                
+                return;
+              }
             }
-          }
-  
+            break;
+          default:
+            
+            break;
+        }
+        await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
+        await super.beforeEachStep(step, flow);
+      }
+
+      async afterEachStep(step, flow) {
+        await super.afterEachStep(step, flow);
+    
+        let pages = await browser.pages()
+        pages.forEach(_page => {
+          _page.on("response", async resp => {
+            var headers = resp.headers()
+            for (let key in headers) {
+              if (key === 'set-cookie') {
+                var tokenObj = headers[key].split(';')[0]
+                var tokenKey = tokenObj.split('=')[0]
+                var tokenVal = tokenObj.split('=')[1]
+                tokenMap[tokenKey] = tokenVal
+              }
+            }
+    
+          })
+          
+          
         })
+        printAndAddLog("after step: " + +Date.now())
+      }
+    
+      async afterAllSteps(flow) {
+        await super.afterAllSteps(flow);
         
-        
-      })
-      printAndAddLog("after step: " + +Date.now())
+        try {
+          const href = await page.evaluate(() =>  window.location.href);
+          await page.waitForNetworkIdle()
+        } catch (err) {
+          printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
+        } 
+
+        page.evaluate((x) => cookieMap = x, tokenMap);
+
+        printAndAddLog("command: " + command)
+    
+        const localStorageValues = await page.evaluate((x) => eval(x), command);
+        const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
+        var token = String(localStorageValues)
+        printAndAddLog("tokenMap: " + stringify(tokenMap))
+        var createdAt = Math.floor(Date.now()/1000)
+        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput}
+
+        output = stringify(outputObj)
+      }
     }
-  
-    async afterAllSteps(flow) {
-      await super.afterAllSteps(flow);
       
+    const runner = await createRunner(
+      bodyObj,
+      new Extension(browser, page, 200000)
+    );
+    
+    await runner.run();
+    printAndAddLog("runner started: ", "info", false)
+
+    return output;
+  } catch (error) {
+    printAndAddLog("Error in runReplay: " + stringify(error), "error");
+    throw error;
+  } finally {
+    if (browser) {
       try {
-        const href = await page.evaluate(() =>  window.location.href);
-        await page.waitForNetworkIdle()
-      } catch (err) {
-        printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
-      } 
-
-      page.evaluate((x) => cookieMap = x, tokenMap);
-
-      printAndAddLog("command: " + command)
-  
-      const localStorageValues = await page.evaluate((x) => eval(x), command);
-      const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
-      var token = String(localStorageValues)
-      printAndAddLog("tokenMap: " + stringify(tokenMap))
-      var createdAt = Math.floor(Date.now()/1000)
-      var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput}
-
-      output = stringify(outputObj)
-      await browser.close();  
+        await browser.close();
+        printAndAddLog("Browser closed successfully", "info", false);
+      } catch (closeError) {
+        printAndAddLog("Error closing browser: " + stringify(closeError), "error");
+      }
     }
   }
-    
-  const runner = await createRunner(
-    bodyObj,
-    new Extension(browser, page, 200000)
-  );
-  
-  await runner.run();
-  printAndAddLog("runner started: ", "info", false)
-
-
-  return output;
 }
 
 
