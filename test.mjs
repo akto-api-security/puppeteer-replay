@@ -5,6 +5,7 @@ import fs from 'fs'
 
 import * as http from 'http';
 import MongoQueue from './mongo_queue.mjs';
+import generateTOTP from './topt-gen.mjs';
 
 const port = process.env.PORT || 3000;
 
@@ -39,6 +40,7 @@ async function runReplay(replayJSON, command) {
   try {
     var body = replayJSON
     var bodyObj = JSON.parse(body);
+    const secretKey = bodyObj?.secretKey;
     
     printAndAddLog("parsed body: " + body)
 
@@ -58,6 +60,38 @@ async function runReplay(replayJSON, command) {
     var output = "{}";
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
+        try {
+          if (secretKey?.length > 0 && step.type === "change") {
+            const allSelectors = step.selectors?.flat() ?? [];
+
+            if (allSelectors.some(sel => sel.includes("autoAdvanceInput"))) {
+              const totpCode = generateTOTP(secretKey);
+
+              const ariaSel = allSelectors.find(sel => sel.startsWith("aria/code"));
+              let index = 0;
+              if (ariaSel) {
+                const match = ariaSel.match(/aria\/code (\d+)/);
+                if (match) index = parseInt(match[1], 10);
+              }
+
+              step.value = totpCode[index];
+              printAndAddLog(`TOTP: filling digit ${index} with ${step.value}`);
+            } else if (allSelectors.some(sel =>
+              sel.toLowerCase().includes("verification code") ||
+              sel.toLowerCase().includes("totp") ||
+              sel.toLowerCase().includes("authenticator")
+            )) {
+              const totpCode = generateTOTP(secretKey);
+              step.value = totpCode;
+
+              printAndAddLog(`TOTP: filling full OTP ${step.value}`);
+            }
+          }
+        } catch (error) {
+          printAndAddLog("Error while filling TOTP: " + error, "error")
+        }
+
+        
         printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
         if (step.requests) {
           let extractorList = step.requests
@@ -220,13 +254,28 @@ async function runReplay(replayJSON, command) {
         page.evaluate((x) => cookieMap = x, tokenMap);
 
         printAndAddLog("command: " + command)
+        const cookies = await page.cookies()
+        const formattedCookies = cookies.map((cookie, index) => ({
+          domain: cookie.domain,
+          expirationDate: cookie.expires,
+          hostOnly: !cookie.domain.startsWith('.'),
+          httpOnly: cookie.httpOnly,
+          name: cookie.name,
+          path: cookie.path,
+          sameSite: cookie.sameSite ? cookie.sameSite.toLowerCase() : 'unspecified',
+          secure: cookie.secure,
+          session: cookie.session || false,
+          storeId: '0',
+          value: cookie.value,
+          id: index + 1
+        }));
     
         const localStorageValues = await page.evaluate((x) => eval(x), command);
         const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
         var token = String(localStorageValues)
         printAndAddLog("tokenMap: " + stringify(tokenMap))
         var createdAt = Math.floor(Date.now()/1000)
-        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput}
+        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies}
 
         output = stringify(outputObj)
       }
