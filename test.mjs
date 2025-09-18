@@ -45,7 +45,7 @@ async function runReplay(replayJSON, command) {
     printAndAddLog("parsed body: " + body)
 
     browser = await puppeteer.launch({
-      headless: true,
+      headless: 'new',
       dumpio: true,
       args: ['--no-sandbox', "--disable-gpu"]
     });
