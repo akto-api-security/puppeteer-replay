@@ -45,9 +45,11 @@ async function runReplay(replayJSON, command) {
     printAndAddLog("parsed body: " + body)
 
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: 'new', // Use new headless mode which is less detectable
       dumpio: true,
-      args: ['--no-sandbox', "--disable-gpu"]
+      args: [
+        '--no-sandbox', '--disable-gpu'
+      ]
     });
     
     printAndAddLog("browser launched: " + body, "info", false)
@@ -55,6 +57,40 @@ async function runReplay(replayJSON, command) {
     const tokenMap = {};
     const page = await browser.newPage();
     printAndAddLog("new page started: " + page, "info", false)
+
+    // Additional anti-detection measures
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+    await page.setViewport({ width: 1920, height: 1080 });
+
+    // Override webdriver property
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+      });
+
+      // Override chrome property
+      window.navigator.chrome = {
+        runtime: {},
+      };
+
+      // Override permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: Notification.permission }) :
+          originalQuery(parameters)
+      );
+
+      // Override plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5],
+      });
+
+      // Override languages
+      Object.defineProperty(navigator, 'languages', {
+        get: () => ['en-US', 'en'],
+      });
+    });
 
     page.setDefaultNavigationTimeout(200000);
     var output = "{}";
@@ -216,6 +252,14 @@ async function runReplay(replayJSON, command) {
         }
         await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
         await super.beforeEachStep(step, flow);
+
+        // Print current page URL
+        try {
+          const currentUrl = await page.url();
+          printAndAddLog(`Current URL: ${currentUrl}`);
+        } catch (err) {
+          printAndAddLog(`Error getting current URL: ${err}`, "error");
+        }
       }
 
       async afterEachStep(step, flow) {
