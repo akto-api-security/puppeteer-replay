@@ -207,6 +207,15 @@ async function runReplay(replayJSON, command) {
         switch(step.type){
           case "click":
           case "change":
+            if (step?.waitForSelector?.length > 0) {
+              printAndAddLog("waiting for selector: " + step.waitForSelector)
+              try {
+                await page.waitForSelector(step.waitForSelector, {timeout: step.timeout || 30000});
+              } catch (error) {
+                printAndAddLog("Error in waitForSelector: " + stringify(error), "error")
+              }
+            }
+            
             if(step?.checkSelector !== undefined){
               let element = null
               try {
