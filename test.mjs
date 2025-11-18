@@ -366,7 +366,7 @@ async function runReplay(replayJSON, command) {
     const startTs = Date.now();
 
     // hard timeout so we do not hang forever on prod
-    const maxRunMs = 240000; // 4 minutes
+    const maxRunMs = 600000; // 10 minutes
     try {
       await Promise.race([
         runner.run(),
