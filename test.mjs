@@ -48,7 +48,17 @@ async function runReplay(replayJSON, command) {
       headless: 'new', // Use new headless mode which is less detectable
       dumpio: true,
       args: [
-        '--no-sandbox', '--disable-gpu'
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update'
       ]
     });
     
@@ -61,7 +71,9 @@ async function runReplay(replayJSON, command) {
     // Additional anti-detection measures
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
-
+    page.setDefaultNavigationTimeout(200000);
+    page.setDefaultTimeout(30000);
+    
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', {
