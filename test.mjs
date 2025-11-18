@@ -364,8 +364,29 @@ async function runReplay(replayJSON, command) {
     );
 
     const startTs = Date.now();
-    await runner.run();
-    printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+
+    // hard timeout so we do not hang forever on prod
+    const maxRunMs = 240000; // 4 minutes
+    try {
+      await Promise.race([
+        runner.run(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("runner.run timeout after " + maxRunMs + " ms")), maxRunMs)
+        ),
+      ]);
+      printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+    } catch (e) {
+      printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
+      // rethrow so caller sees failure
+      try {
+        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+        printAndAddLog("Saved final timeout screenshot", "error");
+      } catch (ssErr) {
+        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      }
+
+      throw e;
+    }
 
     printAndAddLog("runner started: ", "info", false);
 
