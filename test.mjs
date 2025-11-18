@@ -1,8 +1,6 @@
 import { createRunner, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
 
-import fs from 'fs'
-
 import * as http from 'http';
 import MongoQueue from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
@@ -38,20 +36,35 @@ function stringify(obj) {
 async function runReplay(replayJSON, command) {  
   let browser = null;
   try {
-    var body = replayJSON
-    var bodyObj = JSON.parse(body);
-    const secretKey = bodyObj?.secretKey;
-    
-    printAndAddLog("parsed body: " + body)
 
+    console.log(replayJSON, command);
+
+    let body = replayJSON;
+    let bodyObj = JSON.parse(body);
+    const secretKey = bodyObj?.secretKey;
+
+    printAndAddLog("parsed body: " + body);
+
+    // *** CHANGED: safer launch config for Linux in Docker ***
+    printAndAddLog("launching browser", "info", false);
     browser = await puppeteer.launch({
-      headless: 'new', // Use new headless mode which is less detectable
+      headless: 'new',
       dumpio: true,
       args: [
-        '--no-sandbox', '--disable-gpu'
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-extensions',
+        '--disable-sync',
+        '--metrics-recording-only',
+        '--no-first-run',
+        '--safebrowsing-disable-auto-update'
       ]
     });
-    
+
     printAndAddLog("browser launched: " + body, "info", false)
 
     const tokenMap = {};
@@ -61,6 +74,10 @@ async function runReplay(replayJSON, command) {
     // Additional anti-detection measures
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
+
+    // *** CHANGED: set default timeouts so waits fail instead of hanging ***
+    page.setDefaultNavigationTimeout(200000);
+    page.setDefaultTimeout(30000);
 
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
@@ -92,8 +109,7 @@ async function runReplay(replayJSON, command) {
       });
     });
 
-    page.setDefaultNavigationTimeout(200000);
-    var output = "{}";
+    let output = "{}";
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
         try {
@@ -127,71 +143,70 @@ async function runReplay(replayJSON, command) {
           printAndAddLog("Error while filling TOTP: " + error, "error")
         }
 
-        
         printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
         if (step.requests) {
           let extractorList = step.requests
 
           page.on("request", (request) => {
-            // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
             printAndAddLog("request.method(): " + request.method() + " " + request.url())
             if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
-              // Capture some XHR request data and log it to the console
               extractorList.forEach(async (ex) => {
                 if (new RegExp(ex.urlRegex).test(request.url())) {
                   printAndAddLog("url matches: " + request.url())
                   switch (ex.position) {
-                    case "header": 
+                    case "header":
                       printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
-                      let headerVal = request.headers()[ex.name]
-                      if (!!headerVal) {
-                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
-                        printAndAddLog("command: " + command)
-                        await page.evaluate((x) => eval(x), command)
-                      }
-                      break;
-                    case "payload":
-                      if (!request.postData() || request.postData().length == 0) 
-                        break;
-                      let kvPairsStr = request.postData().split("&")
-                      for (let index = 0; index < kvPairsStr.length; index++) {
-                        const kvStr = kvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
+                      {
+                        let headerVal = request.headers()[ex.name]
+                        if (!!headerVal) {
+                          let cmd = "localStorage.setItem(\"" + ex.saveAs + "\", \"" + headerVal + "\");";
+                          printAndAddLog("command: " + cmd);
+                          await page.evaluate((x) => eval(x), cmd);
                         }
                       }
                       break;
-                    case "query": 
-                      let queryParams = request.url().split("?")
-                      if (queryParams.length < 2) break;
+                    case "payload":
+                      if (!request.postData() || request.postData().length === 0)
+                        break;
+                      {
+                        let kvPairsStr = request.postData().split("&")
+                        for (let index = 0; index < kvPairsStr.length; index++) {
+                          const kvStr = kvPairsStr[index];
+                          const [key, value] = kvStr.split("=");
+                          printAndAddLog("key, value pair: " + key + " " + value);
+                          if (key === ex.name && !!value) {
+                            let cmd = "localStorage.setItem(\"" + ex.saveAs + "\", \"" + value + "\");";
+                            printAndAddLog("command: " + cmd);
+                            await page.evaluate((x) => eval(x), cmd);
+                          }
+                        }
+                      }
+                      break;
+                    case "query":
+                      {
+                        let queryParams = request.url().split("?");
+                        if (queryParams.length < 2) break;
 
-                      let querykvPairsStr = queryParams[1].split("&")
-                      for (let index = 0; index < querykvPairsStr.length; index++) {
-                        const kvStr = querykvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)  
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
+                        let querykvPairsStr = queryParams[1].split("&");
+                        for (let index = 0; index < querykvPairsStr.length; index++) {
+                          const kvStr = querykvPairsStr[index];
+                          const [key, value] = kvStr.split("=");
+                          printAndAddLog("key, value pair: " + key + " " + value);
+                          if (key === ex.name && !!value) {
+                            let cmd = "localStorage.setItem(\"" + ex.saveAs + "\", \"" + value + "\");";
+                            printAndAddLog("command: " + cmd);
+                            await page.evaluate((x) => eval(x), cmd);
+                          }
                         }
                       }
                       break;
                   }
                 }
-              })
-              // console.log("XHR Request", request.method(), request.url());
-              // console.log("Headers", request.headers());
-              // console.log("Post Data", request.postData());
+              });
             }
-        
-            // Allow the request to be sent
+
             request.continue();
-          })
+          });
 
           page.on("response", (response) => {
             const request = response.request();
@@ -201,7 +216,6 @@ async function runReplay(replayJSON, command) {
           })
 
           await page.setRequestInterception(true);
-          
         }
 
         switch(step.type){
@@ -238,31 +252,33 @@ async function runReplay(replayJSON, command) {
                 element = null
               }
 
-              
-
-              printAndAddLog("element: " + stringify(element))
-              if(!element){
-                step.type = "click"
-                step.selectors =  [
-                      [
-                          "#lblTop"
-                      ]
+              printAndAddLog("element: " + stringify(element));
+              if (!element) {
+                step.type = "click";
+                step.selectors = [
+                  [
+                    "#lblTop"
                   ]
-                  ,
-                  step.offsetY = 10
-                  step.offsetX = 146                
+                ];
+                step.offsetY = 10;
+                step.offsetX = 146;
                 return;
               }
             }
             break;
           default:
-            
             break;
         }
-        await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
+
+        // *** CHANGED: write screenshots in a known place for easier docker cp ***
+        try {
+          await page.screenshot({ path: "ss_" + (+Date.now()) + ".jpg" });
+        } catch (err) {
+          printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+        }
+
         await super.beforeEachStep(step, flow);
 
-        // Print current page URL
         try {
           const currentUrl = await page.url();
           printAndAddLog(`Current URL: ${currentUrl}`);
@@ -273,41 +289,45 @@ async function runReplay(replayJSON, command) {
 
       async afterEachStep(step, flow) {
         await super.afterEachStep(step, flow);
-    
-        let pages = await browser.pages()
+
+        let pages = await browser.pages();
         pages.forEach(_page => {
           _page.on("response", async resp => {
-            var headers = resp.headers()
+            let headers = resp.headers();
             for (let key in headers) {
               if (key === 'set-cookie') {
-                var tokenObj = headers[key].split(';')[0]
-                var tokenKey = tokenObj.split('=')[0]
-                var tokenVal = tokenObj.split('=')[1]
-                tokenMap[tokenKey] = tokenVal
+                let tokenObj = headers[key].split(';')[0];
+                let tokenKey = tokenObj.split('=')[0];
+                let tokenVal = tokenObj.split('=')[1];
+                tokenMap[tokenKey] = tokenVal;
               }
             }
-    
-          })
-          
-          
-        })
-        printAndAddLog("after step: " + +Date.now())
+          });
+        });
+        printAndAddLog("after step: " + +Date.now());
       }
-    
+
       async afterAllSteps(flow) {
+        printAndAddLog("afterAllSteps start", "info", false);
         await super.afterAllSteps(flow);
-        
+
         try {
-          const href = await page.evaluate(() =>  window.location.href);
-          await page.waitForNetworkIdle()
+          const href = await page.evaluate(() => window.location.href);
+          printAndAddLog("final href: " + href);
+          // *** CHANGED: add explicit timeout to avoid infinite wait ***
+          await page.waitForNetworkIdle({ timeout: 30000 });
         } catch (err) {
-          printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
-        } 
+          printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error");
+        }
 
-        page.evaluate((x) => cookieMap = x, tokenMap);
+        // *** CHANGED: define cookieMap on window explicitly ***
+        await page.evaluate((x) => {
+          window.cookieMap = x;
+        }, tokenMap);
 
-        printAndAddLog("command: " + command)
-        const cookies = await page.cookies()
+        printAndAddLog("command: " + command);
+
+        const cookies = await page.cookies();
         const formattedCookies = cookies.map((cookie, index) => ({
           domain: cookie.domain,
           expirationDate: cookie.expires,
@@ -322,25 +342,53 @@ async function runReplay(replayJSON, command) {
           value: cookie.value,
           id: index + 1
         }));
-    
-        const localStorageValues = await page.evaluate((x) => eval(x), command);
-        const aktoOutput = await page.evaluate((x) => eval(x), "JSON.parse(JSON.stringify(localStorage));");
-        var token = String(localStorageValues)
-        printAndAddLog("tokenMap: " + stringify(tokenMap))
-        var createdAt = Math.floor(Date.now()/1000)
-        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies}
 
-        output = stringify(outputObj)
+        const localStorageValues = await page.evaluate((x) => eval(x), command);
+        const aktoOutput = await page.evaluate(() => JSON.parse(JSON.stringify(localStorage)));
+        let token = String(localStorageValues);
+        printAndAddLog("tokenMap: " + stringify(tokenMap));
+        let createdAt = Math.floor(Date.now() / 1000);
+        let outputObj = { 'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies };
+
+        output = stringify(outputObj);
+        printAndAddLog("afterAllSteps end", "info", false);
       }
     }
-      
+
+    const ext = new Extension(browser, page, 200000);
+
+    printAndAddLog("runner.run starting", "info", false);
     const runner = await createRunner(
       bodyObj,
-      new Extension(browser, page, 200000)
+      ext
     );
-    
-    await runner.run();
-    printAndAddLog("runner started: ", "info", false)
+
+    const startTs = Date.now();
+
+    // hard timeout so we do not hang forever on prod
+    const maxRunMs = 600000; // 10 minutes
+    try {
+      await Promise.race([
+        runner.run(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("runner.run timeout after " + maxRunMs + " ms")), maxRunMs)
+        ),
+      ]);
+      printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+    } catch (e) {
+      printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
+      // rethrow so caller sees failure
+      try {
+        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+        printAndAddLog("Saved final timeout screenshot", "error");
+      } catch (ssErr) {
+        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      }
+
+      throw e;
+    }
+
+    printAndAddLog("runner started: ", "info", false);
 
     return output;
   } catch (error) {
@@ -358,67 +406,41 @@ async function runReplay(replayJSON, command) {
   }
 }
 
-
-
-
-// const path = '/Users/ankushjain/Downloads/insperity-3 (1).json';
-
-// fs.readFile(path, 'utf8', (err, data) => {
-//   if (err) {
-//     console.error('Error reading the file:', err);
-//     return;
-//   }
-//   try {
-//     runReplay(data, "Object.entries(cookieMap).map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('; ');")
-//     .then(x => {
-//       console.log(x)
-//     })
-    
-//   } catch (parseErr) {
-//     console.error('Error parsing JSON:', parseErr);
-//   }
-// });
-
-
-
-
 const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST') {
-        var body = '';
+  if (req.method === 'POST') {
+    var body = '';
+  }
+
+  req.on('data', function (data) {
+    body += data;
+  });
+
+  req.on('end', async function () {
+    try {
+
+      let dataObj = JSON.parse(body);
+      printAndAddLog("dataObj: " + stringify(dataObj));
+      const msg = await runReplay(dataObj.replayJson, dataObj.command);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (mongoQueue) {
+        mongoQueue.flushRemaining();
+      }
+      res.end(msg);
+    } catch (err) {
+      printAndAddLog("error: " + err, "error");
+      res.writeHead(400, { "Content-type": "text/plain" });
+      res.end("Bad request");
     }
-
-    req.on('data', function (data) {
-        body += data;
-    });
-
-    req.on('end', async function () {
-      try {
-        
-        let dataObj = JSON.parse(body)
-        printAndAddLog("dataObj: " + stringify(dataObj))
-        const msg = await runReplay(dataObj.replayJson, dataObj.command);
-        res.writeHead(200, {'Content-Type': 'application/json'});
-        if (mongoQueue) {
-          mongoQueue.flushRemaining();
-        }
-        res.end(msg);
-      } catch (err) {
-        printAndAddLog("error: " + err, "error")
-        res.writeHead(400, {"Content-type": "text/plain"});
-        res.end("Bad request")
-      }    
-    });
+  });
 });
 
 try {
   mongoQueue = new MongoQueue();
   await mongoQueue.connect();
 } catch (err) {
-  console.error(err)
+  console.error(err);
 }
 
 server.listen(port, () => {
-  printAndAddLog(`server running on http://localhost:${port}/`, "info", false)
+  printAndAddLog(`server running on http://localhost:${port}/`, "info", false);
 });
-
-
