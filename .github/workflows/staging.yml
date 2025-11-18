@@ -1,4 +1,4 @@
-name: Release Akto puppeteer service 
+name: Staging
 
 on:
   workflow_dispatch:
