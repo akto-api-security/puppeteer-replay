@@ -1,10 +1,8 @@
 import { createRunner, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
 
-import fs from 'fs'
-
 import * as http from 'http';
-import MongoQueue from './mongo_queue.mjs';
+import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
 
 const port = process.env.PORT || 3000;
@@ -62,6 +60,10 @@ async function runReplay(replayJSON, command) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
+    // *** CHANGED: set default timeouts so waits fail instead of hanging ***
+    page.setDefaultNavigationTimeout(200000);
+    page.setDefaultTimeout(30000);
+
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', {
@@ -92,7 +94,6 @@ async function runReplay(replayJSON, command) {
       });
     });
 
-    page.setDefaultNavigationTimeout(200000);
     var output = "{}";
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
@@ -151,7 +152,7 @@ async function runReplay(replayJSON, command) {
                       }
                       break;
                     case "payload":
-                      if (!request.postData() || request.postData().length == 0) 
+                      if (!request.postData() || request.postData().length === 0) 
                         break;
                       let kvPairsStr = request.postData().split("&")
                       for (let index = 0; index < kvPairsStr.length; index++) {
@@ -259,7 +260,12 @@ async function runReplay(replayJSON, command) {
             
             break;
         }
-        await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
+        try {
+          await page.screenshot({ path:"ss_"+(+Date.now())+".jpg"});
+        } catch (err) {
+          printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+        }
+
         await super.beforeEachStep(step, flow);
 
         // Print current page URL
@@ -299,7 +305,7 @@ async function runReplay(replayJSON, command) {
         
         try {
           const href = await page.evaluate(() =>  window.location.href);
-          await page.waitForNetworkIdle()
+          await page.waitForNetworkIdle({ timeout: 30000 });
         } catch (err) {
           printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
         } 
@@ -333,13 +339,38 @@ async function runReplay(replayJSON, command) {
         output = stringify(outputObj)
       }
     }
-      
+
+    const ext = new Extension(browser, page, 200000)
+
+    printAndAddLog("runner.run starting", "info", false);
     const runner = await createRunner(
       bodyObj,
-      new Extension(browser, page, 200000)
+      ext
     );
-    
-    await runner.run();
+
+    const startTs = Date.now();
+
+    // hard timeout so we do not hang forever
+    const maxRunMs = 300000; // 5 minutes
+    try {
+      await Promise.race([
+        runner.run(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("runner.run timeout after " + maxRunMs + " ms")), maxRunMs)
+        ),
+      ]);
+      printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+    } catch (e) {
+      printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
+      // rethrow so caller sees failure
+      try {
+        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+        printAndAddLog("Saved final timeout screenshot", "error");
+      } catch (ssErr) {
+        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      }
+      throw e;
+    }
     printAndAddLog("runner started: ", "info", false)
 
     return output;
@@ -411,8 +442,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 try {
-  mongoQueue = new MongoQueue();
-  await mongoQueue.connect();
+  if (connectionString != null
+    && connectionString != undefined
+    && connectionString !== ''
+    && connectionString.length > 0
+    && connectionString !== 'undefined'
+  ) {
+    mongoQueue = new MongoQueue();
+    await mongoQueue.connect();
+  }
 } catch (err) {
   console.error(err)
 }
