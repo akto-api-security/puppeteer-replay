@@ -1,10 +1,8 @@
 import { createRunner, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
 
-import fs from 'fs'
-
 import * as http from 'http';
-import MongoQueue from './mongo_queue.mjs';
+import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
 
 const port = process.env.PORT || 3000;
@@ -333,14 +331,39 @@ async function runReplay(replayJSON, command) {
         output = stringify(outputObj)
       }
     }
-      
+
+    const ext = new Extension(browser, page, 200000)
+
+    printAndAddLog("runner.run starting", "info", false);
     const runner = await createRunner(
       bodyObj,
-      new Extension(browser, page, 200000)
+      ext
     );
-    
-    await runner.run();
-    printAndAddLog("runner started: ", "info", false)
+
+    const startTs = Date.now();
+
+    // hard timeout so we do not hang forever
+    const maxRunMs = 300000; // 5 minutes
+    try {
+      printAndAddLog("runner started: ", "info", false)
+      await Promise.race([
+        runner.run(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("runner.run timeout after " + maxRunMs + " ms")), maxRunMs)
+        ),
+      ]);
+      printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+    } catch (e) {
+      printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
+      // rethrow so caller sees failure
+      try {
+        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+        printAndAddLog("Saved final timeout screenshot", "error");
+      } catch (ssErr) {
+        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      }
+      throw e;
+    }
 
     return output;
   } catch (error) {
@@ -411,8 +434,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 try {
-  mongoQueue = new MongoQueue();
-  await mongoQueue.connect();
+  if (connectionString != null
+    && connectionString != undefined
+    && connectionString !== ''
+    && connectionString.length > 0
+    && connectionString !== 'undefined'
+  ) {
+    mongoQueue = new MongoQueue();
+    await mongoQueue.connect();
+  }
 } catch (err) {
   console.error(err)
 }
