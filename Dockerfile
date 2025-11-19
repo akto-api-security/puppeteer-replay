@@ -1,26 +1,21 @@
-FROM alpine
+FROM node:20-slim
 
-# Installs latest Chromium (100) package.
-RUN apk add --no-cache \
-      chromium \
-      nss \
-      freetype \
-      harfbuzz \
-      ca-certificates \
-      ttf-freefont \
-      nodejs \
-      yarn
+# Install Chromium and libraries equivalent to your Alpine setup
+RUN apt-get update && apt-get install -y \
+    chromium \
+    ca-certificates \
+    libnss3 \           # nss
+    libfreetype6 \      # freetype
+    libharfbuzz0b \     # harfbuzz
+    fonts-freefont-ttf \# ttf-freefont
+    fonts-liberation \  # extra common web fonts, often useful
+    && rm -rf /var/lib/apt/lists/*
 
-# Tell Puppeteer to skip installing Chrome. We'll be using the installed package.
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Tell Puppeteer which Chromium to use
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /usr/app
 COPY ./ /usr/app
-
-# Puppeteer v13.5.0 works with Chromium 100.
-# RUN yarn add puppeteer@13.5.0
-RUN apk add --update npm
-
 
 RUN npm install
 COPY test.mjs .
