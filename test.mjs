@@ -60,6 +60,10 @@ async function runReplay(replayJSON, command) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
+    // *** CHANGED: set default timeouts so waits fail instead of hanging ***
+    page.setDefaultNavigationTimeout(200000);
+    page.setDefaultTimeout(30000);
+
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', {
@@ -90,8 +94,8 @@ async function runReplay(replayJSON, command) {
       });
     });
 
-    page.setDefaultNavigationTimeout(200000);
     var output = "{}";
+    let requestInterceptionSetup = false;
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
         try {
@@ -130,6 +134,12 @@ async function runReplay(replayJSON, command) {
         if (step.requests) {
           let extractorList = step.requests
 
+          // Setup request interception only once
+          if (!requestInterceptionSetup) {
+            await page.setRequestInterception(true);
+            requestInterceptionSetup = true;
+          }
+
           page.on("request", (request) => {
             // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
             printAndAddLog("request.method(): " + request.method() + " " + request.url())
@@ -149,7 +159,7 @@ async function runReplay(replayJSON, command) {
                       }
                       break;
                     case "payload":
-                      if (!request.postData() || request.postData().length == 0) 
+                      if (!request.postData() || request.postData().length === 0) 
                         break;
                       let kvPairsStr = request.postData().split("&")
                       for (let index = 0; index < kvPairsStr.length; index++) {
@@ -197,15 +207,52 @@ async function runReplay(replayJSON, command) {
               printAndAddLog("Response Body: " + request.method() + " " + request.url())
             }
           })
-
-          await page.setRequestInterception(true);
           
+        }
+
+        // Wait for page to be ready after navigation
+        if (step.type === "navigate") {
+          try {
+            await page.waitForFunction(
+              () => document.readyState === 'complete' || document.readyState === 'interactive',
+              { timeout: 30000 }
+            ).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await page.waitForNetworkIdle?.({ timeout: 10000, idleTime: 500 }).catch(() => {});
+          } catch (err) {
+            printAndAddLog("Navigation wait error (non-fatal): " + stringify(err));
+          }
         }
 
         switch(step.type){
           case "click":
           case "change":
-            if (step?.waitForSelector?.length > 0) {
+            // Wait for element to be ready
+            if (step.selectors && step.selectors.length > 0) {
+              const allSelectors = step.selectors.flat();
+              let elementFound = false;
+              for (const selector of allSelectors) {
+                try {
+                  if (selector.startsWith("xpath//") || selector.startsWith("pierce/")) continue;
+                  let cleanSelector = selector.startsWith("aria/") 
+                    ? `[aria-label*="${selector.replace("aria/", "").trim()}"]`
+                    : selector;
+                  await page.waitForSelector(cleanSelector, { timeout: Math.min(step.timeout || 30000, 10000), visible: true });
+                  elementFound = true;
+                  break;
+                } catch (err) {
+                  continue;
+                }
+              }
+              if (!elementFound && step?.waitForSelector?.length > 0) {
+                printAndAddLog("waiting for selector: " + step.waitForSelector)
+                try {
+                  await page.waitForSelector(step.waitForSelector, {timeout: step.timeout || 30000});
+                } catch (error) {
+                  printAndAddLog("Error in waitForSelector: " + stringify(error), "error")
+                }
+              }
+            } else if (step?.waitForSelector?.length > 0) {
               printAndAddLog("waiting for selector: " + step.waitForSelector)
               try {
                 await page.waitForSelector(step.waitForSelector, {timeout: step.timeout || 30000});
@@ -213,6 +260,8 @@ async function runReplay(replayJSON, command) {
                 printAndAddLog("Error in waitForSelector: " + stringify(error), "error")
               }
             }
+            // Small delay for DOM stability
+            await new Promise(resolve => setTimeout(resolve, 100));
             
             if(step?.checkSelector !== undefined){
               let element = null
@@ -257,7 +306,12 @@ async function runReplay(replayJSON, command) {
             
             break;
         }
-        await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
+        try {
+          await page.screenshot({ path:"ss_"+(+Date.now())+".jpg"});
+        } catch (err) {
+          printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+        }
+
         await super.beforeEachStep(step, flow);
 
         // Print current page URL
@@ -271,6 +325,16 @@ async function runReplay(replayJSON, command) {
 
       async afterEachStep(step, flow) {
         await super.afterEachStep(step, flow);
+    
+        // Wait for network to settle after click/change actions
+        if (step.type === "click" || step.type === "change") {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await page.waitForNetworkIdle({ timeout: 5000, idleTime: 500 }).catch(() => {});
+          } catch (err) {
+            printAndAddLog("Network idle wait error (non-fatal): " + stringify(err), "error");
+          }
+        }
     
         let pages = await browser.pages()
         pages.forEach(_page => {
@@ -297,7 +361,7 @@ async function runReplay(replayJSON, command) {
         
         try {
           const href = await page.evaluate(() =>  window.location.href);
-          await page.waitForNetworkIdle()
+          await page.waitForNetworkIdle({ timeout: 30000 });
         } catch (err) {
           printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
         } 
