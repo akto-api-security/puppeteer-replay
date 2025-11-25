@@ -96,6 +96,10 @@ async function runReplay(replayJSON, command) {
 
     var output = "{}";
     let requestInterceptionSetup = false;
+    let extractorList = []; // Store extractors outside handler
+    let requestHandlerRegistered = false;
+    let responseHandlerRegistered = false;
+    
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
         try {
@@ -132,7 +136,8 @@ async function runReplay(replayJSON, command) {
         
         printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
         if (step.requests) {
-          let extractorList = step.requests
+          // Update extractor list for current step
+          extractorList = step.requests;
 
           // Setup request interception only once
           if (!requestInterceptionSetup) {
@@ -140,73 +145,96 @@ async function runReplay(replayJSON, command) {
             requestInterceptionSetup = true;
           }
 
-          page.on("request", (request) => {
-            // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
-            printAndAddLog("request.method(): " + request.method() + " " + request.url())
-            if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
-              // Capture some XHR request data and log it to the console
-              extractorList.forEach(async (ex) => {
-                if (new RegExp(ex.urlRegex).test(request.url())) {
-                  printAndAddLog("url matches: " + request.url())
-                  switch (ex.position) {
-                    case "header": 
-                      printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
-                      let headerVal = request.headers()[ex.name]
-                      if (!!headerVal) {
-                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
-                        printAndAddLog("command: " + command)
-                        await page.evaluate((x) => eval(x), command)
-                      }
-                      break;
-                    case "payload":
-                      if (!request.postData() || request.postData().length === 0) 
-                        break;
-                      let kvPairsStr = request.postData().split("&")
-                      for (let index = 0; index < kvPairsStr.length; index++) {
-                        const kvStr = kvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
-                        }
-                      }
-                      break;
-                    case "query": 
-                      let queryParams = request.url().split("?")
-                      if (queryParams.length < 2) break;
+          // Register request handler only once
+          if (!requestHandlerRegistered) {
+            printAndAddLog("requestHandlerRegistered: " + requestHandlerRegistered)
+            page.on("request", async (request) => {
+              try {
+                // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
+                printAndAddLog("request.method(): " + request.method() + " " + request.url())
+                if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
+                  // Process extractors sequentially to avoid race conditions
+                  for (const ex of extractorList) {
+                    try {
+                      if (new RegExp(ex.urlRegex).test(request.url())) {
+                        printAndAddLog("url matches: " + request.url())
+                        switch (ex.position) {
+                          case "header": 
+                            printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
+                            let headerVal = request.headers()[ex.name]
+                            if (!!headerVal) {
+                              let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
+                              printAndAddLog("command: " + command)
+                              await page.evaluate((x) => eval(x), command)
+                            }
+                            break;
+                          case "payload":
+                            if (!request.postData() || request.postData().length === 0) 
+                              break;
+                            let kvPairsStr = request.postData().split("&")
+                            for (let index = 0; index < kvPairsStr.length; index++) {
+                              const kvStr = kvPairsStr[index];
+                              const [key, value] = kvStr.split("=");
+                              printAndAddLog("key, value pair: " + key + " " + value)
+                              if (key === ex.name && !!value) {
+                                let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                                printAndAddLog("command: " + command)
+                                await page.evaluate((x) => eval(x), command)
+                              }
+                            }
+                            break;
+                          case "query": 
+                            let queryParams = request.url().split("?")
+                            if (queryParams.length < 2) break;
 
-                      let querykvPairsStr = queryParams[1].split("&")
-                      for (let index = 0; index < querykvPairsStr.length; index++) {
-                        const kvStr = querykvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)  
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
+                            let querykvPairsStr = queryParams[1].split("&")
+                            for (let index = 0; index < querykvPairsStr.length; index++) {
+                              const kvStr = querykvPairsStr[index];
+                              const [key, value] = kvStr.split("=");
+                              printAndAddLog("key, value pair: " + key + " " + value)  
+                              if (key === ex.name && !!value) {
+                                let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                                printAndAddLog("command: " + command)
+                                await page.evaluate((x) => eval(x), command)
+                              }
+                            }
+                            break;
                         }
                       }
-                      break;
+                    } catch (exError) {
+                      printAndAddLog("Error processing extractor: " + stringify(exError), "error");
+                    }
                   }
                 }
-              })
-              // console.log("XHR Request", request.method(), request.url());
-              // console.log("Headers", request.headers());
-              // console.log("Post Data", request.postData());
-            }
-        
-            // Allow the request to be sent
-            request.continue();
-          })
+              } catch (error) {
+                printAndAddLog("Error in request handler: " + stringify(error), "error");
+              } finally {
+                // Always continue the request, even if there was an error
+                try {
+                  request.continue();
+                } catch (continueError) {
+                  printAndAddLog("Error continuing request: " + stringify(continueError), "error");
+                }
+              }
+            });
+            requestHandlerRegistered = true;
+          }
 
-          page.on("response", (response) => {
-            const request = response.request();
-            if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
-              printAndAddLog("Response Body: " + request.method() + " " + request.url())
-            }
-          })
+          // Register response handler only once
+          if (!responseHandlerRegistered) {
+            printAndAddLog("responseHandlerRegistered: " + responseHandlerRegistered)
+            page.on("response", (response) => {
+              try {
+                const request = response.request();
+                if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
+                  printAndAddLog("Response Body: " + request.method() + " " + request.url())
+                }
+              } catch (error) {
+                printAndAddLog("Error in response handler: " + stringify(error), "error");
+              }
+            });
+            responseHandlerRegistered = true;
+          }
           
         }
 
