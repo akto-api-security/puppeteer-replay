@@ -1,10 +1,8 @@
 import { createRunner, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
 
-import fs from 'fs'
-
 import * as http from 'http';
-import MongoQueue from './mongo_queue.mjs';
+import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
 
 const port = process.env.PORT || 3000;
@@ -62,6 +60,10 @@ async function runReplay(replayJSON, command) {
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
     await page.setViewport({ width: 1920, height: 1080 });
 
+    // *** CHANGED: set default timeouts so waits fail instead of hanging ***
+    page.setDefaultNavigationTimeout(200000);
+    page.setDefaultTimeout(30000);
+
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, 'webdriver', {
@@ -92,8 +94,12 @@ async function runReplay(replayJSON, command) {
       });
     });
 
-    page.setDefaultNavigationTimeout(200000);
     var output = "{}";
+    let requestInterceptionSetup = false;
+    let extractorList = []; // Store extractors outside handler
+    let requestHandlerRegistered = false;
+    let responseHandlerRegistered = false;
+    
     class Extension extends PuppeteerRunnerExtension {
       async beforeEachStep(step, flow) {
         try {
@@ -130,84 +136,151 @@ async function runReplay(replayJSON, command) {
         
         printAndAddLog("step: " + stringify(step) + " " + (typeof step) + " " + +Date.now())
         if (step.requests) {
-          let extractorList = step.requests
+          // Update extractor list for current step
+          extractorList = step.requests;
 
-          page.on("request", (request) => {
-            // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
-            printAndAddLog("request.method(): " + request.method() + " " + request.url())
-            if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
-              // Capture some XHR request data and log it to the console
-              extractorList.forEach(async (ex) => {
-                if (new RegExp(ex.urlRegex).test(request.url())) {
-                  printAndAddLog("url matches: " + request.url())
-                  switch (ex.position) {
-                    case "header": 
-                      printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
-                      let headerVal = request.headers()[ex.name]
-                      if (!!headerVal) {
-                        let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
-                        printAndAddLog("command: " + command)
-                        await page.evaluate((x) => eval(x), command)
-                      }
-                      break;
-                    case "payload":
-                      if (!request.postData() || request.postData().length == 0) 
-                        break;
-                      let kvPairsStr = request.postData().split("&")
-                      for (let index = 0; index < kvPairsStr.length; index++) {
-                        const kvStr = kvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
+          // Setup request interception only once
+          if (!requestInterceptionSetup) {
+            await page.setRequestInterception(true);
+            requestInterceptionSetup = true;
+          }
+
+          // Register request handler only once
+          if (!requestHandlerRegistered) {
+            printAndAddLog("requestHandlerRegistered: " + requestHandlerRegistered)
+            page.on("request", async (request) => {
+              try {
+                // If statement to catch XHR requests and Ignore XHR requests to Google Analytics
+                printAndAddLog("request.method(): " + request.method() + " " + request.url())
+                if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
+                  // Process extractors sequentially to avoid race conditions
+                  for (const ex of extractorList) {
+                    try {
+                      if (new RegExp(ex.urlRegex).test(request.url())) {
+                        printAndAddLog("url matches: " + request.url())
+                        switch (ex.position) {
+                          case "header": 
+                            printAndAddLog("kv pair: " + ex.saveAs + " " + stringify(request.headers()))
+                            let headerVal = request.headers()[ex.name]
+                            if (!!headerVal) {
+                              let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + headerVal + "\");";
+                              printAndAddLog("command: " + command)
+                              await page.evaluate((x) => eval(x), command)
+                            }
+                            break;
+                          case "payload":
+                            if (!request.postData() || request.postData().length === 0) 
+                              break;
+                            let kvPairsStr = request.postData().split("&")
+                            for (let index = 0; index < kvPairsStr.length; index++) {
+                              const kvStr = kvPairsStr[index];
+                              const [key, value] = kvStr.split("=");
+                              printAndAddLog("key, value pair: " + key + " " + value)
+                              if (key === ex.name && !!value) {
+                                let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                                printAndAddLog("command: " + command)
+                                await page.evaluate((x) => eval(x), command)
+                              }
+                            }
+                            break;
+                          case "query": 
+                            let queryParams = request.url().split("?")
+                            if (queryParams.length < 2) break;
+
+                            let querykvPairsStr = queryParams[1].split("&")
+                            for (let index = 0; index < querykvPairsStr.length; index++) {
+                              const kvStr = querykvPairsStr[index];
+                              const [key, value] = kvStr.split("=");
+                              printAndAddLog("key, value pair: " + key + " " + value)  
+                              if (key === ex.name && !!value) {
+                                let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
+                                printAndAddLog("command: " + command)
+                                await page.evaluate((x) => eval(x), command)
+                              }
+                            }
+                            break;
                         }
                       }
-                      break;
-                    case "query": 
-                      let queryParams = request.url().split("?")
-                      if (queryParams.length < 2) break;
-
-                      let querykvPairsStr = queryParams[1].split("&")
-                      for (let index = 0; index < querykvPairsStr.length; index++) {
-                        const kvStr = querykvPairsStr[index];
-                        const [key, value] = kvStr.split("=");
-                        printAndAddLog("key, value pair: " + key + " " + value)  
-                        if (key === ex.name && !!value) {
-                          let command = "localStorage.setItem(\""+ ex.saveAs + "\", \"" + value + "\");";
-                          printAndAddLog("command: " + command)
-                          await page.evaluate((x) => eval(x), command)
-                        }
-                      }
-                      break;
+                    } catch (exError) {
+                      printAndAddLog("Error processing extractor: " + stringify(exError), "error");
+                    }
                   }
                 }
-              })
-              // console.log("XHR Request", request.method(), request.url());
-              // console.log("Headers", request.headers());
-              // console.log("Post Data", request.postData());
-            }
-        
-            // Allow the request to be sent
-            request.continue();
-          })
+              } catch (error) {
+                printAndAddLog("Error in request handler: " + stringify(error), "error");
+              } finally {
+                // Always continue the request, even if there was an error
+                try {
+                  request.continue();
+                } catch (continueError) {
+                  printAndAddLog("Error continuing request: " + stringify(continueError), "error");
+                }
+              }
+            });
+            requestHandlerRegistered = true;
+          }
 
-          page.on("response", (response) => {
-            const request = response.request();
-            if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
-              printAndAddLog("Response Body: " + request.method() + " " + request.url())
-            }
-          })
-
-          await page.setRequestInterception(true);
+          // Register response handler only once
+          if (!responseHandlerRegistered) {
+            printAndAddLog("responseHandlerRegistered: " + responseHandlerRegistered)
+            page.on("response", (response) => {
+              try {
+                const request = response.request();
+                if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
+                  printAndAddLog("Response Body: " + request.method() + " " + request.url())
+                }
+              } catch (error) {
+                printAndAddLog("Error in response handler: " + stringify(error), "error");
+              }
+            });
+            responseHandlerRegistered = true;
+          }
           
+        }
+
+        // Wait for page to be ready after navigation
+        if (step.type === "navigate") {
+          try {
+            await page.waitForFunction(
+              () => document.readyState === 'complete' || document.readyState === 'interactive',
+              { timeout: 30000 }
+            ).catch(() => {});
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await page.waitForNetworkIdle?.({ timeout: 10000, idleTime: 500 }).catch(() => {});
+          } catch (err) {
+            printAndAddLog("Navigation wait error (non-fatal): " + stringify(err));
+          }
         }
 
         switch(step.type){
           case "click":
           case "change":
-            if (step?.waitForSelector?.length > 0) {
+            // Wait for element to be ready
+            if (step.selectors && step.selectors.length > 0) {
+              const allSelectors = step.selectors.flat();
+              let elementFound = false;
+              for (const selector of allSelectors) {
+                try {
+                  if (selector.startsWith("xpath//") || selector.startsWith("pierce/")) continue;
+                  let cleanSelector = selector.startsWith("aria/") 
+                    ? `[aria-label*="${selector.replace("aria/", "").trim()}"]`
+                    : selector;
+                  await page.waitForSelector(cleanSelector, { timeout: Math.min(step.timeout || 30000, 10000), visible: true });
+                  elementFound = true;
+                  break;
+                } catch (err) {
+                  continue;
+                }
+              }
+              if (!elementFound && step?.waitForSelector?.length > 0) {
+                printAndAddLog("waiting for selector: " + step.waitForSelector)
+                try {
+                  await page.waitForSelector(step.waitForSelector, {timeout: step.timeout || 30000});
+                } catch (error) {
+                  printAndAddLog("Error in waitForSelector: " + stringify(error), "error")
+                }
+              }
+            } else if (step?.waitForSelector?.length > 0) {
               printAndAddLog("waiting for selector: " + step.waitForSelector)
               try {
                 await page.waitForSelector(step.waitForSelector, {timeout: step.timeout || 30000});
@@ -215,6 +288,8 @@ async function runReplay(replayJSON, command) {
                 printAndAddLog("Error in waitForSelector: " + stringify(error), "error")
               }
             }
+            // Small delay for DOM stability
+            await new Promise(resolve => setTimeout(resolve, 100));
             
             if(step?.checkSelector !== undefined){
               let element = null
@@ -259,7 +334,12 @@ async function runReplay(replayJSON, command) {
             
             break;
         }
-        await page.screenshot({path:"ss_"+(+Date.now())+".jpg"});
+        try {
+          await page.screenshot({ path:"ss_"+(+Date.now())+".jpg"});
+        } catch (err) {
+          printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+        }
+
         await super.beforeEachStep(step, flow);
 
         // Print current page URL
@@ -273,6 +353,16 @@ async function runReplay(replayJSON, command) {
 
       async afterEachStep(step, flow) {
         await super.afterEachStep(step, flow);
+    
+        // Wait for network to settle after click/change actions
+        if (step.type === "click" || step.type === "change") {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            await page.waitForNetworkIdle({ timeout: 5000, idleTime: 500 }).catch(() => {});
+          } catch (err) {
+            printAndAddLog("Network idle wait error (non-fatal): " + stringify(err), "error");
+          }
+        }
     
         let pages = await browser.pages()
         pages.forEach(_page => {
@@ -299,7 +389,7 @@ async function runReplay(replayJSON, command) {
         
         try {
           const href = await page.evaluate(() =>  window.location.href);
-          await page.waitForNetworkIdle()
+          await page.waitForNetworkIdle({ timeout: 30000 });
         } catch (err) {
           printAndAddLog("error in waitForNetworkIdle: " + stringify(err), "error")
         } 
@@ -333,14 +423,39 @@ async function runReplay(replayJSON, command) {
         output = stringify(outputObj)
       }
     }
-      
+
+    const ext = new Extension(browser, page, 200000)
+
+    printAndAddLog("runner.run starting", "info", false);
     const runner = await createRunner(
       bodyObj,
-      new Extension(browser, page, 200000)
+      ext
     );
-    
-    await runner.run();
-    printAndAddLog("runner started: ", "info", false)
+
+    const startTs = Date.now();
+
+    // hard timeout so we do not hang forever
+    const maxRunMs = 300000; // 5 minutes
+    try {
+      printAndAddLog("runner started: ", "info", false)
+      await Promise.race([
+        runner.run(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("runner.run timeout after " + maxRunMs + " ms")), maxRunMs)
+        ),
+      ]);
+      printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
+    } catch (e) {
+      printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
+      // rethrow so caller sees failure
+      try {
+        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+        printAndAddLog("Saved final timeout screenshot", "error");
+      } catch (ssErr) {
+        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      }
+      throw e;
+    }
 
     return output;
   } catch (error) {
@@ -411,8 +526,15 @@ const server = http.createServer(async (req, res) => {
 });
 
 try {
-  mongoQueue = new MongoQueue();
-  await mongoQueue.connect();
+  if (connectionString != null
+    && connectionString != undefined
+    && connectionString !== ''
+    && connectionString.length > 0
+    && connectionString !== 'undefined'
+  ) {
+    mongoQueue = new MongoQueue();
+    await mongoQueue.connect();
+  }
 } catch (err) {
   console.error(err)
 }
