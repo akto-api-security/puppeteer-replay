@@ -17,7 +17,6 @@ jobs:
       - name: Add version.txt
         run: echo ${{ github.event.inputs.release_version }} > version.txt
 
-      - name: Set up QEMU
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64,amd64
