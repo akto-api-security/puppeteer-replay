@@ -18,14 +18,14 @@ async function sendLogToBackend(log, key) {
       return;
     }
 
-    await fetch('https://app.akto.io/api/insertLogsInDb', {
+    await fetch('https://cyborg.akto.io/api/insertLogsInDb', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey
+        'Authorization': apiKey //Database abstractor token
       },
       body: JSON.stringify({
-        log: log,
+        logMsg: log,
         key: key,
         logDb: "PUPPETEER"
       })
