@@ -6,7 +6,7 @@ async function sendLogToBackend(log, key) {
       return;
     }
 
-    await fetch('http://localhost:82/api/insertPuppeteerLog', {
+    await fetch('https://cyborg.akto.io/api/insertPuppeteerLog', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
