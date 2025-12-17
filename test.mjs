@@ -46,9 +46,15 @@ async function runReplay(replayJSON, command) {
       headless: 'new', // Use new headless mode which is less detectable
       dumpio: true,
       args: [
-        '--no-sandbox', '--disable-gpu'
+        '--no-sandbox', '--disable-gpu', '--disable-setuid-sandbox',  '--disable-features=ServiceWorker',     '--disable-web-security',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--allow-running-insecure-content'
+
       ]
     });
+
+    const wsEndpoint = browser.wsEndpoint();
+    console.log('Puppeteer WS Endpoint URL:', wsEndpoint);
     
     printAndAddLog("browser launched: " + body, "info", false)
 
@@ -63,6 +69,102 @@ async function runReplay(replayJSON, command) {
     // *** CHANGED: set default timeouts so waits fail instead of hanging ***
     page.setDefaultNavigationTimeout(200000);
     page.setDefaultTimeout(30000);
+
+
+
+const cdp = await page.target().createCDPSession();
+
+await cdp.send('Fetch.enable', {
+  patterns: [
+    { urlPattern: 'https://staging.*axating.com/oauth/token*' }
+  ],
+});
+
+
+async function setTokenInLocalStorage(token) {
+  await page.evaluate((t) => {
+    localStorage.setItem('authTokenHeader', t);
+  }, token);
+}
+
+
+async function fulfillBrowserToken(requestId, body) {
+  await cdp.send('Fetch.fulfillRequest', {
+    requestId,
+    responseCode: 200,
+    responseHeaders: [
+      { name: 'content-type', value: 'application/json' },
+    ],
+    body: Buffer.from(body).toString('base64'),
+  });
+}
+
+
+cdp.on('Fetch.requestPaused', async (evt) => {
+  const { requestId, request } = evt;
+
+  if (!request.url.includes('/oauth/token') || request.method !== 'POST') {
+    await cdp.send('Fetch.continueRequest', { requestId });
+    return;
+  }
+
+  console.log('[MITM token]');
+
+  // 1️⃣ BLOCK browser request
+//  await cdp.send('Fetch.failRequest', {
+//    requestId,
+//    errorReason: 'BlockedByClient',
+//  });
+
+  // 2️⃣ Clone headers safely
+  const headers = {};
+  for (const [k, v] of Object.entries(request.headers)) {
+    const lk = k.toLowerCase();
+    if (['host', 'content-length', 'origin', 'referer'].includes(lk)) continue;
+    headers[k] = v;
+  }
+
+  // 3️⃣ Manual fetch (exact same body)
+  try {
+    const res = await fetch(request.url, {
+      method: 'POST',
+      headers,
+      body: request.postData,
+    });
+
+      console.log('[token]', request.method, request.url);
+      console.log('headers:', headers);
+      console.log('postData:', request.postData);
+
+
+    const text = await res.text();
+    console.log('[MANUAL token]', res.status, text);
+
+
+
+    const json = JSON.parse(text);
+    const accessToken = json.access_token;
+
+    if (!accessToken) {
+      console.error('[TOKEN] access_token missing', json);
+      return;
+    }
+
+    console.log('[TOKEN] extracted');
+
+    // 4️⃣ Store token in localStorage
+    await setTokenInLocalStorage(accessToken);
+
+
+    //(Optional) inject response back into browser
+    await fulfillBrowserToken(requestId, text);
+
+  } catch (err) {
+    console.error('[MANUAL token failed]', err);
+  }
+});
+
+
 
     // Override webdriver property
     await page.evaluateOnNewDocument(() => {
