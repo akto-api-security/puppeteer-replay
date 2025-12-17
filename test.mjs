@@ -4,13 +4,23 @@ import puppeteer from 'puppeteer';
 import * as http from 'http';
 import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
+import sendLogToBackend from './log-sender.mjs';
 
 const port = process.env.PORT || 3000;
 
 let mongoQueue = null;
+let shouldSendToBackend = false; // Flag to track if request contains "axating"
 
 function printAndAddLog(log, key = "info", shouldSave = true) {
   console.log(log);
+
+  // Send to backend if the input request contains "axating"
+  if (shouldSendToBackend) {
+    sendLogToBackend(log, key).catch((err) => {
+      console.error('Failed to send log to backend:', err);
+    });
+  }
+
   if (shouldSave && mongoQueue) {
     mongoQueue.addLogToQueue({
       log,
@@ -39,7 +49,7 @@ async function runReplay(replayJSON, command) {
     var body = replayJSON
     var bodyObj = JSON.parse(body);
     const secretKey = bodyObj?.secretKey;
-    
+
     printAndAddLog("parsed body: " + body)
 
     browser = await puppeteer.launch({
@@ -610,7 +620,9 @@ const server = http.createServer(async (req, res) => {
 
     req.on('end', async function () {
       try {
-        
+        // Check if the incoming request contains "axating" or if SEND_LOGS env var is set to true
+        shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
+
         let dataObj = JSON.parse(body)
         printAndAddLog("dataObj: " + stringify(dataObj))
         const msg = await runReplay(dataObj.replayJson, dataObj.command);
@@ -623,7 +635,10 @@ const server = http.createServer(async (req, res) => {
         printAndAddLog("error: " + err, "error")
         res.writeHead(400, {"Content-type": "text/plain"});
         res.end("Bad request")
-      }    
+      } finally {
+        // Reset the flag after processing the request
+        shouldSendToBackend = false;
+      }
     });
 });
 
