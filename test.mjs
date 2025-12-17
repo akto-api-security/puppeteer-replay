@@ -4,36 +4,12 @@ import puppeteer from 'puppeteer';
 import * as http from 'http';
 import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
+import sendLogToBackend from './log-sender.mjs';
 
 const port = process.env.PORT || 3000;
 
 let mongoQueue = null;
 let shouldSendToBackend = false; // Flag to track if request contains "axating"
-
-async function sendLogToBackend(log, key) {
-  try {
-    const apiKey = process.env.AKTO_API_KEY;
-    if (!apiKey) {
-      console.error('AKTO_API_KEY environment variable is not set');
-      return;
-    }
-
-    await fetch('https://cyborg.akto.io/api/insertLogsInDb', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': apiKey //Database abstractor token
-      },
-      body: JSON.stringify({
-        logMsg: log,
-        key: key,
-        logDb: "PUPPETEER"
-      })
-    });
-  } catch (err) {
-    console.error('Error sending log to backend:', err);
-  }
-}
 
 function printAndAddLog(log, key = "info", shouldSave = true) {
   console.log(log);
@@ -644,9 +620,8 @@ const server = http.createServer(async (req, res) => {
 
     req.on('end', async function () {
       try {
-        // Check if the incoming request (URL or body) contains "axating"
-        const requestUrl = req.url || '';
-        shouldSendToBackend = requestUrl.includes("axating") || body.includes("axating");
+        // Check if the incoming request contains "axating"
+        shouldSendToBackend = body.includes("axating");
 
         let dataObj = JSON.parse(body)
         printAndAddLog("dataObj: " + stringify(dataObj))
