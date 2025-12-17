@@ -8,9 +8,43 @@ import generateTOTP from './topt-gen.mjs';
 const port = process.env.PORT || 3000;
 
 let mongoQueue = null;
+let shouldSendToBackend = false; // Flag to track if request contains "axating"
+
+async function sendLogToBackend(log, key) {
+  try {
+    const apiKey = process.env.AKTO_API_KEY;
+    if (!apiKey) {
+      console.error('AKTO_API_KEY environment variable is not set');
+      return;
+    }
+
+    await fetch('https://app.akto.io/api/insertLogsInDb', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey
+      },
+      body: JSON.stringify({
+        log: log,
+        key: key,
+        logDb: "PUPPETEER"
+      })
+    });
+  } catch (err) {
+    console.error('Error sending log to backend:', err);
+  }
+}
 
 function printAndAddLog(log, key = "info", shouldSave = true) {
   console.log(log);
+
+  // Send to backend if the input request contains "axating"
+  if (shouldSendToBackend) {
+    sendLogToBackend(log, key).catch((err) => {
+      console.error('Failed to send log to backend:', err);
+    });
+  }
+
   if (shouldSave && mongoQueue) {
     mongoQueue.addLogToQueue({
       log,
@@ -39,7 +73,7 @@ async function runReplay(replayJSON, command) {
     var body = replayJSON
     var bodyObj = JSON.parse(body);
     const secretKey = bodyObj?.secretKey;
-    
+
     printAndAddLog("parsed body: " + body)
 
     browser = await puppeteer.launch({
@@ -610,7 +644,10 @@ const server = http.createServer(async (req, res) => {
 
     req.on('end', async function () {
       try {
-        
+        // Check if the incoming request (URL or body) contains "axating"
+        const requestUrl = req.url || '';
+        shouldSendToBackend = requestUrl.includes("axating") || body.includes("axating");
+
         let dataObj = JSON.parse(body)
         printAndAddLog("dataObj: " + stringify(dataObj))
         const msg = await runReplay(dataObj.replayJson, dataObj.command);
@@ -623,7 +660,10 @@ const server = http.createServer(async (req, res) => {
         printAndAddLog("error: " + err, "error")
         res.writeHead(400, {"Content-type": "text/plain"});
         res.end("Bad request")
-      }    
+      } finally {
+        // Reset the flag after processing the request
+        shouldSendToBackend = false;
+      }
     });
 });
 
