@@ -2,7 +2,6 @@ async function sendLogToBackend(log, key) {
   try {
     const apiKey = process.env.AKTO_API_KEY;
     if (!apiKey) {
-      console.error('AKTO_API_KEY environment variable is not set');
       return;
     }
 

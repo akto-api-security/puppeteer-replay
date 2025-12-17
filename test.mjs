@@ -620,8 +620,8 @@ const server = http.createServer(async (req, res) => {
 
     req.on('end', async function () {
       try {
-        // Check if the incoming request contains "axating"
-        shouldSendToBackend = body.includes("axating");
+        // Check if the incoming request contains "axating" or if SEND_LOGS env var is set to true
+        shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
 
         let dataObj = JSON.parse(body)
         printAndAddLog("dataObj: " + stringify(dataObj))
