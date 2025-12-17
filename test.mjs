@@ -86,7 +86,7 @@ const cdp = await page.target().createCDPSession();
 
 await cdp.send('Fetch.enable', {
   patterns: [
-    { urlPattern: 'https://staging.*axating.com/oauth/token*' }
+    { urlPattern: '*axating*/oauth/token*' }
   ],
 });
 
