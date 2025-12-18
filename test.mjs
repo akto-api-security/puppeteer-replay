@@ -118,7 +118,7 @@ cdp.on('Fetch.requestPaused', async (evt) => {
     return;
   }
 
-  console.log('[MITM token]');
+  printAndAddLog('[MITM token]');
 
   // 1️⃣ BLOCK browser request
 //  await cdp.send('Fetch.failRequest', {
@@ -128,6 +128,7 @@ cdp.on('Fetch.requestPaused', async (evt) => {
 
   // 2️⃣ Clone headers safely
   const headers = {};
+  
   for (const [k, v] of Object.entries(request.headers)) {
     const lk = k.toLowerCase();
     if (['host', 'content-length', 'origin', 'referer'].includes(lk)) continue;
@@ -142,13 +143,13 @@ cdp.on('Fetch.requestPaused', async (evt) => {
       body: request.postData,
     });
 
-      console.log('[token]', request.method, request.url);
-      console.log('headers:', headers);
-      console.log('postData:', request.postData);
+      printAndAddLog('[token] ' + request.method + " " + request.url);
+      printAndAddLog('headers:' + " " + JSON.stringify(headers));
+      printAndAddLog('postData:' + " " + request.postData);
 
 
     const text = await res.text();
-    console.log('[MANUAL token]', res.status, text);
+    printAndAddLog('[MANUAL token]: ' + res.status + " " + text);
 
 
 
@@ -156,11 +157,11 @@ cdp.on('Fetch.requestPaused', async (evt) => {
     const accessToken = json.access_token;
 
     if (!accessToken) {
-      console.error('[TOKEN] access_token missing', json);
+      printAndAddLog('[TOKEN] access_token missing' + " " + text);
       return;
     }
 
-    console.log('[TOKEN] extracted');
+    printAndAddLog('[TOKEN] extracted');
 
     // 4️⃣ Store token in localStorage
     await setTokenInLocalStorage(accessToken);
@@ -170,7 +171,7 @@ cdp.on('Fetch.requestPaused', async (evt) => {
     await fulfillBrowserToken(requestId, text);
 
   } catch (err) {
-    console.error('[MANUAL token failed]', err);
+    printAndAddLog('[MANUAL token failed]: ' + err);
   }
 });
 
