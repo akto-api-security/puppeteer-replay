@@ -49,6 +49,7 @@ async function runReplay(replayJSON, command) {
     var body = replayJSON
     var bodyObj = JSON.parse(body);
     const secretKey = bodyObj?.secretKey;
+    const customHeaders = bodyObj?.headers || {};
 
     printAndAddLog("parsed body: " + body)
 
@@ -80,7 +81,17 @@ async function runReplay(replayJSON, command) {
     page.setDefaultNavigationTimeout(200000);
     page.setDefaultTimeout(30000);
 
-
+    // Apply custom headers if present in the recording
+    if (customHeaders && Object.keys(customHeaders).length > 0) {
+      try {
+        printAndAddLog(`Applying custom headers: ${stringify(customHeaders)}`);
+        await page.setExtraHTTPHeaders(customHeaders);
+        printAndAddLog("Custom headers applied successfully");
+      } catch (headerError) {
+        printAndAddLog(`Warning: Failed to apply custom headers: ${stringify(headerError)}`, "error");
+        // Non-fatal: continue execution even if header application fails
+      }
+    }
 
 const cdp = await page.target().createCDPSession();
 
