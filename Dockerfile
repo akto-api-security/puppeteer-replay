@@ -1,30 +1,45 @@
-FROM alpine
+FROM amazonlinux:2023
 
-# Installs latest Chromium (100) package.
-RUN apk add --no-cache \
+# Install Chromium + runtime deps + Node.js/npm
+RUN dnf -y update && \
+    dnf -y install \
       chromium \
       nss \
       freetype \
       harfbuzz \
       ca-certificates \
-      ttf-freefont \
       nodejs \
-      yarn
+      npm \
+      fontconfig \
+      freetype \
+      shadow-utils \
+      xdg-utils \
+      libX11 \
+      libXcomposite \
+      libXdamage \
+      libXext \
+      libXfixes \
+      libXrandr \
+      libxcb \
+      libxkbcommon \
+      alsa-lib \
+      atk \
+      at-spi2-atk \
+      cups-libs \
+      dbus-libs \
+      gtk3 \
+      pango \
+      mesa-libgbm \
+    && dnf clean all && rm -rf /var/cache/dnf
 
-# Tell Puppeteer to skip installing Chrome. We'll be using the installed package.
+# Puppeteer: use system Chromium (don’t download its own)
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 WORKDIR /usr/app
-COPY ./ /usr/app
-
-# Puppeteer v13.5.0 works with Chromium 100.
-# RUN yarn add puppeteer@13.5.0
-RUN apk add --update npm
-
+COPY . /usr/app
 
 RUN npm install
-COPY test.mjs .
-
 
 CMD ["node", "test.mjs"]
 
