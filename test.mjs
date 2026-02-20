@@ -244,7 +244,8 @@ cdp.on('Fetch.requestPaused', async (evt) => {
             } else if (allSelectors.some(sel =>
               sel.toLowerCase().includes("verification code") ||
               sel.toLowerCase().includes("totp") ||
-              sel.toLowerCase().includes("authenticator")
+              sel.toLowerCase().includes("authenticator") ||
+              sel.toLowerCase().includes("enter code")
             )) {
               const totpCode = generateTOTP(secretKey);
               step.value = totpCode;
