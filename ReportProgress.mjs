@@ -20,9 +20,13 @@ export function setEntry(reportId, entry) {
   progressMap.set(reportId, { ...entry, updatedAt: getUnixTimestampInSeconds() });
 }
 
-export function startCleanupInterval() {
+/**
+ * @param {(msg: string, key?: string, shouldSave?: boolean) => void} [log] - e.g. printAndAddLog from test.mjs
+ */
+export function startCleanupInterval(log = console.log) {
   setInterval(() => {
     const now = getUnixTimestampInSeconds();
+    let ctr = 0;
     for (const [reportId, entry] of progressMap.entries()) {
       if (now - entry.updatedAt > TEN_MINUTES_SECONDS) {
         if (entry.reportTmpFile && typeof entry.reportTmpFile.removeCallback === 'function') {
@@ -33,8 +37,10 @@ export function startCleanupInterval() {
           }
         }
         progressMap.delete(reportId);
+        ctr += 1;
       }
     }
+    log(`[ReportProgress] Cleaned up ${ctr} report progress entries.`);
   }, 10 * 60 * 1000); // every 10 minutes
 }
 

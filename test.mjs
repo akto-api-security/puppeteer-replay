@@ -653,16 +653,23 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ status: fresh.status, updatedAt: fresh.updatedAt }));
             setImmediate(() => {
-              generatePDF(reportId, dataObj).catch((err) => {
+              generatePDF(reportId, dataObj, printAndAddLog).catch((err) => {
                 printAndAddLog(`generatePDF failed for reportId ${reportId}: ${err?.message || err}`, 'error');
               });
             });
           } else {
             if (entry.status === 'COMPLETED' && entry.reportTmpFile) {
-              const buf = fs.readFileSync(entry.reportTmpFile.name);
-              const base64PDF = buf.toString('base64');
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ status: 'COMPLETED', base64PDF }));
+              try {
+                const buf = fs.readFileSync(entry.reportTmpFile.name);
+                const base64PDF = buf.toString('base64');
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: 'COMPLETED', base64PDF }));
+              } catch (error) {
+                printAndAddLog(`[ReportId - ${reportId}] Error - ${error}`, 'error');
+                ReportProgress.setEntry(reportId, { status: 'ERROR' });
+                // res.writeHead(500, { 'Content-Type': 'application/json' });
+                // res.end(JSON.stringify({ status: 'ERROR', message: error?.message || String(error) }));
+              }
             } else {
               res.writeHead(200, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ status: entry.status }));
@@ -719,7 +726,7 @@ try {
   console.error(err)
 }
 
-ReportProgress.startCleanupInterval();
+ReportProgress.startCleanupInterval(printAndAddLog);
 
 server.listen(port, () => {
   printAndAddLog(`server running on http://localhost:${port}/`, "info", false);
