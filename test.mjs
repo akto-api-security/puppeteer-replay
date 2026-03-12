@@ -1,10 +1,13 @@
 import { createRunner, PuppeteerRunnerExtension } from '@puppeteer/replay';
 import puppeteer from 'puppeteer';
+import * as fs from 'fs';
 
 import * as http from 'http';
 import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
 import sendLogToBackend from './log-sender.mjs';
+import * as ReportProgress from './ReportProgress.mjs';
+import { generatePDF, generateSamplePDF } from './pdf-generator.mjs';
 
 const port = process.env.PORT || 3000;
 
@@ -631,24 +634,72 @@ const server = http.createServer(async (req, res) => {
     });
 
     req.on('end', async function () {
-      try {
-        // Check if the incoming request contains "axating" or if SEND_LOGS env var is set to true
-        shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
+      const pathname = (req.url || '/').split('?')[0];
 
-        let dataObj = JSON.parse(body)
-        printAndAddLog("dataObj: " + stringify(dataObj))
+      try {
+        // POST /downloadReportPDF – start or poll report PDF generation
+        if (req.method === 'POST' && pathname === '/downloadReportPDF') {
+          const dataObj = JSON.parse(body || '{}');
+          const reportId = dataObj.reportId;
+          if (reportId == null || reportId === '') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'FAILED', message: 'reportId is required' }));
+            return;
+          }
+          const entry = ReportProgress.getEntry(reportId);
+          if (!entry) {
+            ReportProgress.setEntry(reportId, { status: 'IN_PROGRESS' });
+            const fresh = ReportProgress.getEntry(reportId);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: fresh.status, updatedAt: fresh.updatedAt }));
+            setImmediate(() => {
+              generatePDF(reportId, dataObj).catch((err) => {
+                printAndAddLog(`generatePDF failed for reportId ${reportId}: ${err?.message || err}`, 'error');
+              });
+            });
+          } else {
+            if (entry.status === 'COMPLETED' && entry.reportTmpFile) {
+              const buf = fs.readFileSync(entry.reportTmpFile.name);
+              const base64PDF = buf.toString('base64');
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'COMPLETED', base64PDF }));
+            } else {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: entry.status }));
+            }
+          }
+          return;
+        }
+
+        // POST /samplePDF – generate sample PDF from fixed URL
+        if (req.method === 'POST' && pathname === '/samplePDF') {
+          try {
+            const result = await generateSamplePDF();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+          } catch (err) {
+            printAndAddLog("samplePDF error: " + err, "error");
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ status: 'FAILED', message: err.message }));
+          }
+          return;
+        }
+
+        // POST / (default) – existing replay behavior unchanged
+        shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
+        let dataObj = JSON.parse(body);
+        printAndAddLog("dataObj: " + stringify(dataObj));
         const msg = await runReplay(dataObj.replayJson, dataObj.command);
-        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.writeHead(200, { 'Content-Type': 'application/json' });
         if (mongoQueue) {
           mongoQueue.flushRemaining();
         }
         res.end(msg);
       } catch (err) {
-        printAndAddLog("error: " + err, "error")
-        res.writeHead(400, {"Content-type": "text/plain"});
-        res.end("Bad request")
+        printAndAddLog("error: " + err, "error");
+        res.writeHead(400, { "Content-type": "text/plain" });
+        res.end("Bad request");
       } finally {
-        // Reset the flag after processing the request
         shouldSendToBackend = false;
       }
     });
@@ -668,8 +719,10 @@ try {
   console.error(err)
 }
 
+ReportProgress.startCleanupInterval();
+
 server.listen(port, () => {
-  printAndAddLog(`server running on http://localhost:${port}/`, "info", false)
+  printAndAddLog(`server running on http://localhost:${port}/`, "info", false);
 });
 
 

@@ -9,6 +9,7 @@ const collectionName = process.env.MONGO_COLLECTION_NAME
 
 class MongoQueue {
     constructor(batchSize = 10) {
+        console.log("MongoQueue constructor", "connectionString: ", connectionString, "dbName: ", dbName, "collectionName: ", collectionName);
         this.client = new MongoClient(connectionString);
         this.queue = [];
         this.batchSize = batchSize;
