@@ -637,57 +637,67 @@ const server = http.createServer(async (req, res) => {
       const pathname = (req.url || '/').split('?')[0];
 
       try {
-        // POST /downloadReportPDF – start or poll report PDF generation
+        // POST /downloadReportPDF – start or poll report PDF generation (wrapped so production is unaffected)
         if (req.method === 'POST' && pathname === '/downloadReportPDF') {
-          const dataObj = JSON.parse(body || '{}');
-          const reportId = dataObj.reportId;
-          if (reportId == null || reportId === '') {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'FAILED', message: 'reportId is required' }));
-            return;
-          }
-          const entry = ReportProgress.getEntry(reportId);
-          if (!entry) {
-            ReportProgress.setEntry(reportId, { status: 'IN_PROGRESS' });
-            const fresh = ReportProgress.getEntry(reportId);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: fresh.status, updatedAt: fresh.updatedAt }));
-            setImmediate(() => {
-              generatePDF(reportId, dataObj, printAndAddLog).catch((err) => {
-                printAndAddLog(`generatePDF failed for reportId ${reportId}: ${err?.message || err}`, 'error');
-              });
-            });
-          } else {
-            if (entry.status === 'COMPLETED' && entry.reportTmpFile) {
-              try {
-                const buf = fs.readFileSync(entry.reportTmpFile.name);
-                const base64PDF = buf.toString('base64');
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ status: 'COMPLETED', base64PDF }));
-              } catch (error) {
-                printAndAddLog(`[ReportId - ${reportId}] Error - ${error}`, 'error');
-                ReportProgress.setEntry(reportId, { status: 'ERROR' });
-                // res.writeHead(500, { 'Content-Type': 'application/json' });
-                // res.end(JSON.stringify({ status: 'ERROR', message: error?.message || String(error) }));
-              }
-            } else {
-              res.writeHead(200, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ status: entry.status }));
+          try {
+            const dataObj = JSON.parse(body || '{}');
+            const reportId = dataObj.reportId;
+            if (reportId == null || reportId === '') {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'FAILED', message: 'reportId is required' }));
+              return;
             }
+            const entry = ReportProgress.getEntry(reportId);
+            if (!entry) {
+              ReportProgress.setEntry(reportId, { status: 'IN_PROGRESS' });
+              const fresh = ReportProgress.getEntry(reportId);
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: fresh.status, updatedAt: fresh.updatedAt }));
+              setImmediate(() => {
+                generatePDF(reportId, dataObj, printAndAddLog).catch((err) => {
+                  printAndAddLog(`generatePDF failed for reportId ${reportId}: ${err?.message || err}`, 'error');
+                });
+              });
+            } else {
+              if (entry.status === 'COMPLETED' && entry.reportTmpFile) {
+                try {
+                  const buf = fs.readFileSync(entry.reportTmpFile.name);
+                  const base64PDF = buf.toString('base64');
+                  res.writeHead(200, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ status: 'COMPLETED', base64PDF }));
+                } catch (error) {
+                  printAndAddLog(`[ReportId - ${reportId}] Error - ${error}`, 'error');
+                  ReportProgress.setEntry(reportId, { status: 'ERROR' });
+                  res.writeHead(500, { 'Content-Type': 'application/json' });
+                  res.end(JSON.stringify({ status: 'ERROR', message: error?.message || String(error) }));
+                }
+              } else {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: entry.status }));
+              }
+            }
+          } catch (err) {
+            printAndAddLog(`downloadReportPDF error: ${err}`, 'error');
+            try {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'FAILED', message: err?.message || String(err) }));
+            } catch (resErr) {}
           }
           return;
         }
 
-        // POST /samplePDF – generate sample PDF from fixed URL
+        // POST /samplePDF – generate sample PDF from fixed URL (wrapped so production is unaffected)
         if (req.method === 'POST' && pathname === '/samplePDF') {
           try {
             const result = await generateSamplePDF();
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result));
           } catch (err) {
-            printAndAddLog("samplePDF error: " + err, "error");
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'FAILED', message: err.message }));
+            printAndAddLog('samplePDF error: ' + err, 'error');
+            try {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'FAILED', message: err?.message || String(err) }));
+            } catch (resErr) {}
           }
           return;
         }
@@ -726,7 +736,11 @@ try {
   console.error(err)
 }
 
-ReportProgress.startCleanupInterval(printAndAddLog);
+try {
+  ReportProgress.startCleanupInterval(printAndAddLog);
+} catch (err) {
+  console.error('ReportProgress.startCleanupInterval failed:', err);
+}
 
 server.listen(port, () => {
   printAndAddLog(`server running on http://localhost:${port}/`, "info", false);
