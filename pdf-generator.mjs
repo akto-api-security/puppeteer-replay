@@ -92,13 +92,6 @@ export async function generatePDF(reportId, params, log = console.log) {
       await page.setExtraHTTPHeaders(headers);
     }
 
-    log(`${logPrefix} Opening report url - ${resolvedUrl}.`);
-    const response = await page.goto(resolvedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    if (response && !response.ok()) {
-      log(`${logPrefix} Navigation failed: ${response.status()} ${response.statusText()}`, 'error');
-    }
-
     const urlPath = new URL(resolvedUrl).pathname;
     let expectedApiName = null;
     if (urlPath.includes('dashboard/testing/summary')) {
@@ -109,30 +102,60 @@ export async function generatePDF(reportId, params, log = console.log) {
       expectedApiName = 'fetchThreatTopNData';
     }
 
+    // Attach API response listener *before* goto so we don't miss the request that runs on page load
+    const API_WAIT_MS = 25000;
+    const POST_API_DELAY_MS = 5000;
+    let apiWaitPromise = null;
     if (expectedApiName) {
-      log(`${logPrefix} Waiting for ${expectedApiName} API to resolve based on URL: ${urlPath}`);
-
-      await new Promise((resolve) => {
+      log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
+      apiWaitPromise = new Promise((resolve) => {
         const timeout = setTimeout(() => {
-          log(`${logPrefix} Timed out waiting for ${expectedApiName}. Continuing anyway.`, 'error');
+          log(`${logPrefix} Timed out waiting for ${expectedApiName}. Will rely on DOM wait.`, 'error');
           resolve();
-        }, 10000);
-
+        }, API_WAIT_MS);
         const onResponse = async (response) => {
           const url = response.url();
           if (url.includes(expectedApiName)) {
             clearTimeout(timeout);
             page.off('response', onResponse);
-            log(`${logPrefix} ${expectedApiName} resolved with status ${response.status()}`);
-            await new Promise((r) => setTimeout(r, 3000));
+            log(`${logPrefix} ${expectedApiName} resolved with status ${response.status()}. Waiting ${POST_API_DELAY_MS}ms for render.`);
+            await new Promise((r) => setTimeout(r, POST_API_DELAY_MS));
             resolve();
           }
         };
-
         page.on('response', onResponse);
       });
-    } else {
-      log(`${logPrefix} No matching summary path found in URL: ${urlPath}. Skipping API wait.`);
+    }
+
+    log(`${logPrefix} Opening report url - ${resolvedUrl}.`);
+    const response = await page.goto(resolvedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+
+    if (response && !response.ok()) {
+      log(`${logPrefix} Navigation failed: ${response.status()} ${response.statusText()}`, 'error');
+    }
+
+    if (apiWaitPromise) {
+      await apiWaitPromise;
+    }
+
+    // DOM-based wait: ensure report content (e.g. "Vulnerable APIs", charts) is visible before PDF
+    log(`${logPrefix} Waiting for report content to render.`);
+    try {
+      await page.waitForFunction(
+        () => {
+          const body = document.body?.innerText || '';
+          return (
+            body.includes('Vulnerable APIs') ||
+            body.includes('Report summary') ||
+            body.includes('Issues by Severity') ||
+            body.includes('Vulnerable issues')
+          );
+        },
+        { timeout: 20000 }
+      );
+      await new Promise((r) => setTimeout(r, 3000));
+    } catch (e) {
+      log(`${logPrefix} Report content wait timed out. Continuing with PDF.`, 'error');
     }
 
     await page.addStyleTag({
