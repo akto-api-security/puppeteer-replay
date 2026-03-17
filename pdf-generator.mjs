@@ -13,6 +13,33 @@ const PUPPETEER_ARGS = [
   '--disable-features=Vulkan'
 ];
 
+/** When reportUrl points at app.akto.io, use local dashboard container (e.g. in same docker-compose). */
+const AKTO_APP_HOST = 'app.akto.io';
+const LOCAL_DASHBOARD_BASE_URL = process.env.LOCAL_DASHBOARD_BASE_URL || 'http://akto-api-security-dashboard:8080';
+
+/**
+ * If reportUrl is from app.akto.io, rewrite to local dashboard URL so Puppeteer hits the local container.
+ * @param {string} reportUrl
+ * @returns {{ url: string, usedLocal: boolean }}
+ */
+
+function resolveReportUrl(reportUrl) {
+  let url;
+  try {
+    url = new URL(reportUrl);
+  } catch {
+    return { url: reportUrl, usedLocal: false };
+  }
+  const hostname = (url.hostname || '').toLowerCase();
+  if (hostname === AKTO_APP_HOST) {
+    const base = LOCAL_DASHBOARD_BASE_URL.replace(/\/$/, '');
+    const pathAndSearch = url.pathname + url.search;
+    const localUrl = base + pathAndSearch;
+    return { url: localUrl, usedLocal: true };
+  }
+  return { url: reportUrl, usedLocal: false };
+}
+
 function capitalizeFirstLetter(val) {
   if (!val) return val;
   return val.charAt(0).toUpperCase() + val.slice(1);
@@ -34,6 +61,11 @@ export async function generatePDF(reportId, params, log = console.log) {
       log(`${logPrefix} Missing reportUrl. Marking as FAILED.`, 'error');
       ReportProgress.setEntry(reportId, { status: 'FAILED', error: 'reportUrl is required' });
       return;
+    }
+
+    const { url: resolvedUrl, usedLocal } = resolveReportUrl(reportUrl);
+    if (usedLocal) {
+      log(`${logPrefix} Report URL is from ${AKTO_APP_HOST}; using local dashboard: ${resolvedUrl}`);
     }
 
     log(`${logPrefix} Generating PDF for report with following details: ${username}, ${organizationName}, ${reportDate}`);
@@ -60,14 +92,14 @@ export async function generatePDF(reportId, params, log = console.log) {
       await page.setExtraHTTPHeaders(headers);
     }
 
-    log(`${logPrefix} Opening report url - ${reportUrl}.`);
-    const response = await page.goto(reportUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    log(`${logPrefix} Opening report url - ${resolvedUrl}.`);
+    const response = await page.goto(resolvedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
 
     if (response && !response.ok()) {
       log(`${logPrefix} Navigation failed: ${response.status()} ${response.statusText()}`, 'error');
     }
 
-    const urlPath = new URL(reportUrl).pathname;
+    const urlPath = new URL(resolvedUrl).pathname;
     let expectedApiName = null;
     if (urlPath.includes('dashboard/testing/summary')) {
       expectedApiName = 'fetchIssuesFromResultIds';
