@@ -6,7 +6,9 @@ import * as http from 'http';
 import MongoQueue, { connectionString } from './mongo_queue.mjs';
 import generateTOTP from './topt-gen.mjs';
 import sendLogToBackend from './log-sender.mjs';
+import { randomUUID } from 'crypto';
 import * as ReportProgress from './ReportProgress.mjs';
+import * as ReplayScreenshotStore from './ReplayScreenshotStore.mjs';
 import { generatePDF, generateSamplePDF } from './pdf-generator.mjs';
 
 const port = process.env.PORT || 3000;
@@ -42,12 +44,14 @@ function stringify(obj) {
   try {
     return JSON.stringify(obj);
   } catch (err) {
-    return err.message || "Could not stringify object"; 
+    return err.message || "Could not stringify object";
   }
 }
 
-async function runReplay(replayJSON, command) {  
+async function runReplay(replayJSON, command, replayOptions = {}) {
   let browser = null;
+  const { captureScreenshots = false, screenshotSessionId = null } = replayOptions;
+  const screenshotsBuffer = [];
   try {
     var body = replayJSON
     var bodyObj = JSON.parse(body);
@@ -227,6 +231,19 @@ cdp.on('Fetch.requestPaused', async (evt) => {
     let responseHandlerRegistered = false;
     
     class Extension extends PuppeteerRunnerExtension {
+      constructor(browser, page, opts = {}) {
+        const {
+          timeout = 300000,
+          screenshotSessionId: ssId = null,
+          screenshotsBuffer: ssBuf = null,
+          captureScreenshots: capSs = false,
+        } = opts;
+        super(browser, page, { timeout });
+        this.screenshotSessionId = ssId;
+        this.screenshotsBuffer = ssBuf;
+        this.captureScreenshots = capSs;
+      }
+
       async beforeEachStep(step, flow) {
         try {
           if (secretKey?.length > 0 && step.type === "change") {
@@ -461,10 +478,13 @@ cdp.on('Fetch.requestPaused', async (evt) => {
             
             break;
         }
-        try {
-          await page.screenshot({ path:"ss_"+(+Date.now())+".jpg"});
-        } catch (err) {
-          printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+        if (this.captureScreenshots && this.screenshotsBuffer) {
+          try {
+            const b64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 82 });
+            this.screenshotsBuffer.push(b64);
+          } catch (err) {
+            printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+          }
         }
 
         await super.beforeEachStep(step, flow);
@@ -546,12 +566,20 @@ cdp.on('Fetch.requestPaused', async (evt) => {
         printAndAddLog("tokenMap: " + stringify(tokenMap))
         var createdAt = Math.floor(Date.now()/1000)
         var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies}
+        if (this.screenshotSessionId) {
+          outputObj.screenshotSessionId = this.screenshotSessionId;
+        }
 
         output = stringify(outputObj)
       }
     }
 
-    const ext = new Extension(browser, page, 200000)
+    const ext = new Extension(browser, page, {
+      timeout: 200000,
+      screenshotSessionId: captureScreenshots ? screenshotSessionId : null,
+      screenshotsBuffer,
+      captureScreenshots,
+    });
 
     printAndAddLog("runner.run starting", "info", false);
     const runner = await createRunner(
@@ -563,8 +591,9 @@ cdp.on('Fetch.requestPaused', async (evt) => {
 
     // hard timeout so we do not hang forever
     const maxRunMs = 300000; // 5 minutes
+    let replayError = null;
     try {
-      printAndAddLog("runner started: ", "info", false)
+      printAndAddLog("runner started: ", "info", false);
       await Promise.race([
         runner.run(),
         new Promise((_, reject) =>
@@ -573,20 +602,51 @@ cdp.on('Fetch.requestPaused', async (evt) => {
       ]);
       printAndAddLog("runner.run finished in " + (Date.now() - startTs) + " ms", "info", false);
     } catch (e) {
+      replayError = e;
       printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
-      // rethrow so caller sees failure
-      try {
-        await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
-        printAndAddLog("Saved final timeout screenshot", "error");
-      } catch (ssErr) {
-        printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      if (captureScreenshots && screenshotSessionId) {
+        try {
+          const b64 = await page.screenshot({ encoding: 'base64', type: 'png', fullPage: true });
+          screenshotsBuffer.push(b64);
+          printAndAddLog("Captured final timeout screenshot (base64)", "error");
+        } catch (ssErr) {
+          printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+        }
+      } else {
+        try {
+          await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
+          printAndAddLog("Saved final timeout screenshot", "error");
+        } catch (ssErr) {
+          printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+        }
       }
-      throw e;
+    } finally {
+      if (captureScreenshots && screenshotSessionId) {
+        ReplayScreenshotStore.setEntry(screenshotSessionId, {
+          status: replayError ? 'FAILED' : 'COMPLETED',
+          screenshotsBase64: [...screenshotsBuffer],
+          ...(replayError ? { error: replayError.message || String(replayError) } : {}),
+        });
+      }
+    }
+    if (replayError) {
+      throw replayError;
     }
 
     return output;
   } catch (error) {
     printAndAddLog("Error in runReplay: " + stringify(error), "error");
+    if (
+      captureScreenshots &&
+      screenshotSessionId &&
+      !ReplayScreenshotStore.getEntry(screenshotSessionId)
+    ) {
+      ReplayScreenshotStore.setEntry(screenshotSessionId, {
+        status: 'FAILED',
+        screenshotsBase64: [...screenshotsBuffer],
+        error: error.message || String(error),
+      });
+    }
     throw error;
   } finally {
     if (browser) {
@@ -686,6 +746,45 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        // POST /getReplayScreenshots – fetch base64 JPEG screenshots for a replay session (after POST / with captureScreenshots)
+        if (req.method === 'POST' && pathname === '/getReplayScreenshots') {
+          try {
+            const dataObj = JSON.parse(body || '{}');
+            const screenshotSessionId = dataObj.screenshotSessionId;
+            if (screenshotSessionId == null || screenshotSessionId === '') {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'FAILED', message: 'screenshotSessionId is required' }));
+              return;
+            }
+            const entry = ReplayScreenshotStore.getEntry(screenshotSessionId);
+            if (!entry) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(
+                JSON.stringify({
+                  status: 'NOT_FOUND',
+                  message: 'Unknown or expired screenshotSessionId',
+                })
+              );
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                status: entry.status,
+                screenshotsBase64: entry.screenshotsBase64 || [],
+                ...(entry.error ? { error: entry.error } : {}),
+              })
+            );
+          } catch (err) {
+            printAndAddLog(`getReplayScreenshots error: ${err}`, 'error');
+            try {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ status: 'FAILED', message: err?.message || String(err) }));
+            } catch (resErr) {}
+          }
+          return;
+        }
+
         // POST /samplePDF – generate sample PDF from fixed URL (wrapped so production is unaffected)
         if (req.method === 'POST' && pathname === '/samplePDF') {
           try {
@@ -706,7 +805,12 @@ const server = http.createServer(async (req, res) => {
         shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
         let dataObj = JSON.parse(body);
         printAndAddLog("dataObj: " + stringify(dataObj));
-        const msg = await runReplay(dataObj.replayJson, dataObj.command);
+        const captureScreenshots = Boolean(dataObj.captureScreenshots);
+        const screenshotSessionId = captureScreenshots ? randomUUID() : null;
+        const msg = await runReplay(dataObj.replayJson, dataObj.command, {
+          captureScreenshots,
+          screenshotSessionId,
+        });
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (mongoQueue) {
           mongoQueue.flushRemaining();
@@ -740,6 +844,12 @@ try {
   ReportProgress.startCleanupInterval(printAndAddLog);
 } catch (err) {
   console.error('ReportProgress.startCleanupInterval failed:', err);
+}
+
+try {
+  ReplayScreenshotStore.startCleanupInterval(printAndAddLog);
+} catch (err) {
+  console.error('ReplayScreenshotStore.startCleanupInterval failed:', err);
 }
 
 server.listen(port, () => {
