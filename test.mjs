@@ -62,7 +62,7 @@ async function runReplay(replayJSON, command, replayOptions = {}) {
 
     browser = await puppeteer.launch({
       headless: 'new', // Use new headless mode which is less detectable
-      dumpio: true,
+        dumpio: true,
       args: [
         '--no-sandbox', '--disable-gpu', '--disable-setuid-sandbox',  '--disable-features=ServiceWorker',     '--disable-web-security',
     '--disable-features=IsolateOrigins,site-per-process',
@@ -478,13 +478,18 @@ cdp.on('Fetch.requestPaused', async (evt) => {
             
             break;
         }
-        if (this.captureScreenshots && this.screenshotsBuffer) {
-          try {
+        try {
+          const stamp = +Date.now();
+          const localPath = 'ss_' + stamp + '.jpg';
+          if (this.captureScreenshots && this.screenshotsBuffer) {
             const b64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 82 });
             this.screenshotsBuffer.push(b64);
-          } catch (err) {
-            printAndAddLog("Error taking screenshot: " + stringify(err), "error");
+            await fs.promises.writeFile(localPath, Buffer.from(b64, 'base64'));
+          } else {
+            await page.screenshot({ path: localPath });
           }
+        } catch (err) {
+          printAndAddLog('Error taking screenshot: ' + stringify(err), 'error');
         }
 
         await super.beforeEachStep(step, flow);
@@ -604,21 +609,17 @@ cdp.on('Fetch.requestPaused', async (evt) => {
     } catch (e) {
       replayError = e;
       printAndAddLog("runner.run error or timeout: " + stringify(e), "error");
-      if (captureScreenshots && screenshotSessionId) {
-        try {
-          const b64 = await page.screenshot({ encoding: 'base64', type: 'png', fullPage: true });
-          screenshotsBuffer.push(b64);
-          printAndAddLog("Captured final timeout screenshot (base64)", "error");
-        } catch (ssErr) {
-          printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
+      try {
+        const timeoutPath = '/tmp/final_timeout_' + (+Date.now()) + '.png';
+        await page.screenshot({ path: timeoutPath, fullPage: true });
+        printAndAddLog('Saved final timeout screenshot: ' + timeoutPath, 'error');
+        if (captureScreenshots && screenshotSessionId) {
+          const buf = await fs.promises.readFile(timeoutPath);
+          screenshotsBuffer.push(buf.toString('base64'));
+          printAndAddLog('Included final timeout screenshot in session buffer (base64)', 'error');
         }
-      } else {
-        try {
-          await page.screenshot({ path: "/tmp/final_timeout_" + (+Date.now()) + ".png", fullPage: true });
-          printAndAddLog("Saved final timeout screenshot", "error");
-        } catch (ssErr) {
-          printAndAddLog("Error saving final timeout screenshot: " + stringify(ssErr), "error");
-        }
+      } catch (ssErr) {
+        printAndAddLog('Error saving final timeout screenshot: ' + stringify(ssErr), 'error');
       }
     } finally {
       if (captureScreenshots && screenshotSessionId) {
