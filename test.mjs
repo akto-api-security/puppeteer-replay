@@ -367,11 +367,42 @@ cdp.on('Fetch.requestPaused', async (evt) => {
           // Register response handler only once
           if (!responseHandlerRegistered) {
             printAndAddLog("responseHandlerRegistered: " + responseHandlerRegistered)
-            page.on("response", (response) => {
+            page.on("response", async (response) => {
               try {
                 const request = response.request();
-                if (request.resourceType() === "xhr" && request.method() === "OPTIONS") {
-                  printAndAddLog("Response Body: " + request.method() + " " + request.url())
+                printAndAddLog("response.method(): " + request.method() + " " + request.url())
+                if ((request.resourceType() === "xhr" || request.resourceType() === "fetch") && request.method() !== "OPTIONS") {
+                  for (const ex of extractorList) {
+                    try {
+                      if (ex.position !== "response") continue;
+                      if (!new RegExp(ex.urlRegex).test(request.url())) continue;
+                      printAndAddLog("response url matches: " + request.url())
+                      const text = await response.text();
+                      let json;
+                      try {
+                        json = JSON.parse(text);
+                      } catch {
+                        printAndAddLog("response body is not JSON, skipping extractor for: " + request.url());
+                        continue;
+                      }
+                      switch (ex.position) {
+                        case "response":
+                          printAndAddLog("response kv pair: " + ex.saveAs + " " + stringify(json))
+                          const val = json[ex.name];
+                          if (val != null) {
+                            const safeVal = String(val).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                            let command = `localStorage.setItem("${ex.saveAs}", "${safeVal}");`;
+                            printAndAddLog("response command: " + command)
+                            await page.evaluate((x) => eval(x), command)
+                          } else {
+                            printAndAddLog("response key not found: " + ex.name)
+                          }
+                          break;
+                      }
+                    } catch (exError) {
+                      printAndAddLog("Error processing response extractor: " + stringify(exError), "error");
+                    }
+                  }
                 }
               } catch (error) {
                 printAndAddLog("Error in response handler: " + stringify(error), "error");
