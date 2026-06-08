@@ -865,7 +865,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         // POST / (default) – existing replay behavior unchanged
-        shouldSendToBackend = body.includes("axating") || process.env.SEND_LOGS === 'true';
+        shouldSendToBackend = !!process.env.LOG_SENDER_API_KEY;
         let dataObj = JSON.parse(body);
         printAndAddLog("dataObj: " + stringify(dataObj));
         const captureScreenshots = Boolean(dataObj.captureScreenshots);
