@@ -13,6 +13,9 @@ import { generatePDF, generateSamplePDF } from './pdf-generator.mjs';
 
 const port = process.env.PORT || 3000;
 
+// Stores the latest screenshot per live session; polled by dashboard during replay
+const latestScreenshots = new Map();
+
 let mongoQueue = null;
 let shouldSendToBackend = false; // Flag to track if request contains "axating"
 
@@ -60,15 +63,24 @@ async function runReplay(replayJSON, command, replayOptions = {}) {
 
     printAndAddLog("parsed body: " + body)
 
-    browser = await puppeteer.launch({
-      headless: 'new', // Use new headless mode which is less detectable
-        dumpio: true,
-      args: [
-        '--no-sandbox', '--disable-gpu', '--disable-setuid-sandbox',  '--disable-features=ServiceWorker',     '--disable-web-security',
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--allow-running-insecure-content'
+    const isLinux = process.platform === 'linux';
+    const executablePath = process.env.CHROME_PATH ||
+      (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
 
-      ]
+    browser = await puppeteer.launch({
+      headless: 'new',
+      ...(executablePath ? { executablePath } : {}),
+      ignoreDefaultArgs: ['--enable-automation'],
+      args: [
+        ...(isLinux ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--disable-web-security',
+        '--allow-running-insecure-content',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--window-size=1512,861',
+      ],
     });
 
     const wsEndpoint = browser.wsEndpoint();
@@ -515,6 +527,7 @@ cdp.on('Fetch.requestPaused', async (evt) => {
           if (this.captureScreenshots && this.screenshotsBuffer) {
             const b64 = await page.screenshot({ encoding: 'base64', type: 'jpeg', quality: 82 });
             this.screenshotsBuffer.push(b64);
+            if (this.screenshotSessionId) latestScreenshots.set(this.screenshotSessionId, b64);
             await fs.promises.writeFile(localPath, Buffer.from(b64, 'base64'));
           } else {
             await page.screenshot({ path: localPath });
@@ -646,8 +659,9 @@ cdp.on('Fetch.requestPaused', async (evt) => {
         printAndAddLog('Saved final timeout screenshot: ' + timeoutPath, 'error');
         if (captureScreenshots && screenshotSessionId) {
           const buf = await fs.promises.readFile(timeoutPath);
-          screenshotsBuffer.push(buf.toString('base64'));
-          printAndAddLog('Included final timeout screenshot in session buffer (base64)', 'error');
+          const b64 = buf.toString('base64');
+          screenshotsBuffer.push(b64);
+          latestScreenshots.set(screenshotSessionId, b64);
         }
       } catch (ssErr) {
         printAndAddLog('Error saving final timeout screenshot: ' + stringify(ssErr), 'error');
@@ -659,6 +673,8 @@ cdp.on('Fetch.requestPaused', async (evt) => {
           screenshotsBase64: [...screenshotsBuffer],
           ...(replayError ? { error: replayError.message || String(replayError) } : {}),
         });
+        // clean up live entry after a short delay — gives any in-flight dashboard polls time to complete
+        setTimeout(() => latestScreenshots.delete(screenshotSessionId), 30000);
       }
     }
     if (replayError) {
@@ -778,6 +794,21 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
+        // POST /getLatestReplayScreenshot – returns the most recent screenshot for a live session (mid-replay)
+        if (req.method === 'POST' && pathname === '/getLatestReplayScreenshot') {
+          try {
+            const dataObj = JSON.parse(body || '{}');
+            const sessionId = dataObj.screenshotSessionId;
+            const b64 = sessionId ? (latestScreenshots.get(sessionId) || null) : null;
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ screenshotBase64: b64 }));
+          } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ screenshotBase64: null }));
+          }
+          return;
+        }
+
         // POST /getReplayScreenshots – fetch base64 JPEG screenshots for a replay session (after POST / with captureScreenshots)
         if (req.method === 'POST' && pathname === '/getReplayScreenshots') {
           try {
@@ -838,16 +869,25 @@ const server = http.createServer(async (req, res) => {
         let dataObj = JSON.parse(body);
         printAndAddLog("dataObj: " + stringify(dataObj));
         const captureScreenshots = Boolean(dataObj.captureScreenshots);
-        const screenshotSessionId = captureScreenshots ? randomUUID() : null;
-        const msg = await runReplay(dataObj.replayJson, dataObj.command, {
-          captureScreenshots,
-          screenshotSessionId,
-        });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        if (mongoQueue) {
-          mongoQueue.flushRemaining();
+        // Hoist so the catch block can include it in the error JSON
+        let screenshotSessionId = captureScreenshots ? (dataObj.screenshotSessionId || randomUUID()) : null;
+        try {
+          const msg = await runReplay(dataObj.replayJson, dataObj.command, {
+            captureScreenshots,
+            screenshotSessionId,
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          if (mongoQueue) {
+            mongoQueue.flushRemaining();
+          }
+          res.end(msg);
+        } catch (innerErr) {
+          // Return JSON so Java can still extract screenshotSessionId and fetch screenshots
+          const errBody = { error: innerErr.message || String(innerErr) };
+          if (screenshotSessionId) errBody.screenshotSessionId = screenshotSessionId;
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(errBody));
         }
-        res.end(msg);
       } catch (err) {
         printAndAddLog("error: " + err, "error");
         res.writeHead(400, { "Content-type": "text/plain" });
