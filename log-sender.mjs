@@ -3,7 +3,8 @@ async function sendLogToBackend(log, key) {
     const apiKey = process.env.LOG_SENDER_API_KEY;
     if (!apiKey) return;
 
-    await fetch('https://ultron.akto.io/api/insertPuppeteerLog', {
+    const domain = process.env.LOG_SENDER_DOMAIN || 'https://ultron.akto.io';
+    await fetch(`${domain}/api/insertPuppeteerLog`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

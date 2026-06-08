@@ -887,13 +887,13 @@ const server = http.createServer(async (req, res) => {
           if (screenshotSessionId) errBody.screenshotSessionId = screenshotSessionId;
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(errBody));
+        } finally {
+          shouldSendToBackend = false;
         }
       } catch (err) {
         printAndAddLog("error: " + err, "error");
         res.writeHead(400, { "Content-type": "text/plain" });
         res.end("Bad request");
-      } finally {
-        shouldSendToBackend = false;
       }
     });
 });
