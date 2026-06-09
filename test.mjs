@@ -89,6 +89,7 @@ async function runReplay(replayJSON, command, replayOptions = {}) {
     printAndAddLog("browser launched: " + body, "info", false)
 
     const tokenMap = {};
+    let capturedCsrfToken = null;
     const page = await browser.newPage();
     printAndAddLog("new page started: " + page, "info", false)
 
@@ -204,6 +205,24 @@ cdp.on('Fetch.requestPaused', async (evt) => {
   }
 });
 
+await cdp.send('Network.enable');
+cdp.on('Network.requestWillBeSent', (evt) => {
+  try {
+    const pageHostname = new URL(page.url()).hostname;
+    const reqHostname = new URL(evt.request.url).hostname;
+    if (!pageHostname || reqHostname !== pageHostname) return;
+  } catch {
+    return;
+  }
+  const headers = evt.request.headers;
+  for (const [name, value] of Object.entries(headers)) {
+    const lname = name.toLowerCase();
+    if ((lname.includes('csrf') || lname.includes('xsrf')) && value) {
+      capturedCsrfToken = { headerName: name, value };
+      break;
+    }
+  }
+});
 
 
     // Override webdriver property
@@ -615,7 +634,9 @@ cdp.on('Fetch.requestPaused', async (evt) => {
         printAndAddLog("tokenMap: " + stringify(tokenMap))
         var createdAt = Math.floor(Date.now()/1000)
         const cookieHeader = formattedCookies.map(c => `${c.name}=${c.value}`).join('; ');
-        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies, 'cookieHeader': cookieHeader}
+        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies, 'cookieHeader': cookieHeader,
+          ...(capturedCsrfToken ? { csrfToken: capturedCsrfToken.value, csrfTokenHeaderName: capturedCsrfToken.headerName } : {})
+        }
         if (this.screenshotSessionId) {
           outputObj.screenshotSessionId = this.screenshotSessionId;
         }
