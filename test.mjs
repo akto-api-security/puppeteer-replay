@@ -614,7 +614,8 @@ cdp.on('Fetch.requestPaused', async (evt) => {
         var token = String(localStorageValues)
         printAndAddLog("tokenMap: " + stringify(tokenMap))
         var createdAt = Math.floor(Date.now()/1000)
-        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies}
+        const cookieHeader = formattedCookies.map(c => `${c.name}=${c.value}`).join('; ');
+        var outputObj = {'token': token, "created_at": createdAt, "aktoOutput": aktoOutput, 'all_cookies': formattedCookies, 'cookieHeader': cookieHeader}
         if (this.screenshotSessionId) {
           outputObj.screenshotSessionId = this.screenshotSessionId;
         }
