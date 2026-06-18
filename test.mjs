@@ -72,7 +72,7 @@ async function runReplay(replayJSON, command, replayOptions = {}) {
       ...(executablePath ? { executablePath } : {}),
       ignoreDefaultArgs: ['--enable-automation'],
       args: [
-        ...(isLinux ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+        ...(isLinux ? ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] : []),
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-web-security',
