@@ -112,7 +112,7 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     // Attach API response listener *before* goto so we don't miss the request that runs on page load
     const API_WAIT_MS = 25000;
-    const POST_API_DELAY_MS = 25000;
+    const POST_API_DELAY_MS = 5000;
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
@@ -146,24 +146,23 @@ export async function generatePDF(reportId, params, log = console.log) {
       await apiWaitPromise;
     }
 
-    // DOM-based wait: ensure report content (e.g. "Vulnerable APIs", charts) is visible before PDF
+    // DOM-based wait: poll until #report-container has substantial rendered height.
+    // Text sentinels are unreliable because strings like 'Report summary' exist in the
+    // page shell before API data loads. scrollHeight only grows after React paints content.
     log(`${logPrefix} Waiting for report content to render.`);
     try {
       await page.waitForFunction(
         () => {
-          const body = document.body?.innerText || '';
-          return (
-            body.includes('Vulnerable APIs') ||
-            body.includes('Report summary') ||
-            body.includes('Issues by Severity') ||
-            body.includes('Vulnerable issues')
-          );
+          const container = document.getElementById('report-container');
+          return container && container.scrollHeight > 1000;
         },
-        { timeout: 20000 }
+        { timeout: 30000 }
       );
+      log(`${logPrefix} Report content detected in DOM (scrollHeight > 1000).`);
       await new Promise((r) => setTimeout(r, 3000));
     } catch (e) {
-      log(`${logPrefix} Report content wait timed out. Continuing with PDF.`, 'error');
+      const pageText = await page.evaluate(() => (document.body?.innerText || '').slice(0, 500)).catch(() => '(could not read)');
+      log(`${logPrefix} Report content wait timed out. Page text sample: ${pageText}`, 'error');
     }
 
     await page.addStyleTag({
