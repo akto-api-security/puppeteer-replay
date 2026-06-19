@@ -92,7 +92,15 @@ export async function generatePDF(reportId, params, log = console.log) {
       await page.setExtraHTTPHeaders(headers);
     }
 
-    const urlPath = new URL(resolvedUrl).pathname;
+    const parsedReportUrl = new URL(resolvedUrl);
+    const urlPath = parsedReportUrl.pathname;
+
+    const reportCategory = (parsedReportUrl.searchParams.get('category') || '').toUpperCase();
+    const headerFindingsLabel =
+      reportCategory === 'AGENTIC' ? 'Agentic Security Findings'
+      : reportCategory === 'ENDPOINT' ? 'Agentic Security Findings'
+      : 'API Security Findings';
+
     let expectedApiName = null;
     if (urlPath.includes('dashboard/testing/summary')) {
       expectedApiName = 'fetchIssuesFromResultIds';
@@ -198,7 +206,7 @@ export async function generatePDF(reportId, params, log = console.log) {
       }
       const usernameWrapper = document.getElementById('second-line-wrapper');
       if (usernameWrapper) {
-        usernameWrapper.innerText += payload.usernameSuffix;
+        usernameWrapper.innerText = usernameWrapper.innerText.replace(/@\w+/, '@' + payload.usernameSuffix);
       }
       const organizationNameEl = document.getElementById('organization-name');
       if (organizationNameEl) {
@@ -211,7 +219,7 @@ export async function generatePDF(reportId, params, log = console.log) {
         <div style="font-size: 12px; width: 100vw; background-color: #1E3161; color: white; height: 100%; z-index: 2;">
           <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 64px;">
             <div>
-              <h4 style="font-weight: 600">${capitalizeFirstLetter(organizationName)} API Security Findings</h4>
+              <h4 style="font-weight: 600">${capitalizeFirstLetter(organizationName)} ${headerFindingsLabel}</h4>
               <p style="font-weight: 400">${reportDate}</p>
             </div>
           </div>
