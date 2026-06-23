@@ -163,7 +163,7 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     // Attach API response listener *before* goto so we don't miss the request that runs on page load
     const API_WAIT_MS = 25000;
-    const POST_API_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+    const POST_API_DELAY_MS = 5000;
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
@@ -177,16 +177,8 @@ export async function generatePDF(reportId, params, log = console.log) {
           if (url.includes(expectedApiName)) {
             clearTimeout(timeout);
             page.off('response', onResponse);
-            log(`${logPrefix} ${expectedApiName} resolved with status ${response.status()}. Waiting ${POST_API_DELAY_MS / 1000}s for render.`);
-            const tickMs = 60 * 1000;
-            const ticks = Math.floor(POST_API_DELAY_MS / tickMs);
-            for (let i = 1; i <= ticks; i++) {
-              await new Promise((r) => setTimeout(r, tickMs));
-              log(`${logPrefix} Post-API render wait: ${i}min elapsed of ${ticks}min total.`);
-            }
-            const remainder = POST_API_DELAY_MS % tickMs;
-            if (remainder > 0) await new Promise((r) => setTimeout(r, remainder));
-            log(`${logPrefix} Post-API render wait complete. Proceeding to PDF.`);
+            log(`${logPrefix} ${expectedApiName} resolved with status ${response.status()}. Waiting ${POST_API_DELAY_MS}ms for render.`);
+            await new Promise((r) => setTimeout(r, POST_API_DELAY_MS));
             resolve();
           }
         };
