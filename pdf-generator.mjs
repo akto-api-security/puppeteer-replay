@@ -31,7 +31,7 @@ function resolveReportUrl(reportUrl) {
     return { url: reportUrl, usedLocal: false };
   }
   const hostname = (url.hostname || '').toLowerCase();
-  if (hostname === AKTO_APP_HOST) {
+  if (hostname === AKTO_APP_HOST || hostname === 'localhost' || hostname === '127.0.0.1') {
     const base = LOCAL_DASHBOARD_BASE_URL.replace(/\/$/, '');
     const pathAndSearch = url.pathname + url.search;
     const localUrl = base + pathAndSearch;
@@ -55,6 +55,9 @@ export async function generatePDF(reportId, params, log = console.log) {
   let browser = null;
   let tmpFile = null;
   const logPrefix = `[ReportId - ${reportId}]`;
+
+  // Searchable tag for all network logs from this run
+  const NET = `[NET][${reportId}]`;
 
   try {
     if (!reportUrl) {
@@ -91,6 +94,54 @@ export async function generatePDF(reportId, params, log = console.log) {
     if (Object.keys(headers).length > 0) {
       await page.setExtraHTTPHeaders(headers);
     }
+
+    log(`${NET} Extra headers sent by Puppeteer: ${JSON.stringify(Object.keys(headers).reduce((acc, k) => {
+      // redact token values to keep logs readable but show which headers are present
+      acc[k] = k.toLowerCase().includes('cookie') || k.toLowerCase().includes('authorization') || k.toLowerCase() === 'access-token'
+        ? `${String(headers[k]).substring(0, 12)}...[redacted]`
+        : headers[k];
+      return acc;
+    }, {}))}`);
+
+    // Wire up request/response logging before navigation
+    const requestStartTimes = new Map();
+
+    page.on('request', (req) => {
+      requestStartTimes.set(req.url(), Date.now());
+      const reqHeaders = req.headers();
+      const sanitizedHeaders = Object.keys(reqHeaders).reduce((acc, k) => {
+        const lk = k.toLowerCase();
+        if (lk === 'cookie' || lk === 'authorization' || lk === 'access-token') {
+          acc[k] = `${String(reqHeaders[k]).substring(0, 12)}...[redacted]`;
+        } else {
+          acc[k] = reqHeaders[k];
+        }
+        return acc;
+      }, {});
+      const postData = req.postData();
+      log(`${NET} REQ ${req.method()} ${req.url()} headers=${JSON.stringify(sanitizedHeaders)}${postData ? ` body=${postData.substring(0, 300)}` : ''}`);
+    });
+
+    page.on('response', async (resp) => {
+      const url = resp.url();
+      const startTime = requestStartTimes.get(url);
+      const latencyMs = startTime ? Date.now() - startTime : -1;
+      requestStartTimes.delete(url);
+      const respHeaders = resp.headers();
+      let bodySnippet = '';
+      try {
+        const text = await resp.text();
+        bodySnippet = text.substring(0, 500);
+      } catch (_) {}
+      log(`${NET} RES ${resp.status()} ${url} latency=${latencyMs}ms headers=${JSON.stringify(respHeaders)} body=${bodySnippet}`);
+    });
+
+    page.on('requestfailed', (req) => {
+      const startTime = requestStartTimes.get(req.url());
+      const latencyMs = startTime ? Date.now() - startTime : -1;
+      requestStartTimes.delete(req.url());
+      log(`${NET} FAILED ${req.method()} ${req.url()} latency=${latencyMs}ms reason=${req.failure()?.errorText}`, 'error');
+    });
 
     const parsedReportUrl = new URL(resolvedUrl);
     const urlPath = parsedReportUrl.pathname;
@@ -136,7 +187,9 @@ export async function generatePDF(reportId, params, log = console.log) {
     }
 
     log(`${logPrefix} Opening report url - ${resolvedUrl}.`);
+    const navStart = Date.now();
     const response = await page.goto(resolvedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+    log(`${NET} PAGE_LOAD ${resolvedUrl} status=${response?.status()} latency=${Date.now() - navStart}ms`);
 
     if (response && !response.ok()) {
       log(`${logPrefix} Navigation failed: ${response.status()} ${response.statusText()}`, 'error');
