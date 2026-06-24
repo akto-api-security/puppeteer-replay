@@ -82,6 +82,9 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     log(`${logPrefix} Setting up page.`);
     const page = await browser.newPage();
+    // 1440px matches a standard laptop so charts render at the same width users see on screen.
+    // The report content column is 56vw (100vw - 2*22vw), so at 1440px that's ~806px.
+    await page.setViewport({ width: 1440, height: 900 });
 
     const headers = {};
     if (accessToken) {
@@ -228,6 +231,13 @@ export async function generatePDF(reportId, params, log = console.log) {
           print-color-adjust: exact !important;
           -webkit-print-color-adjust: exact !important;
         }
+        #report-summary .issues-severity-graph-table-container,
+        #report-summary .pie-chart {
+          transform: none !important;
+        }
+        .Polaris-Badge {
+          border: none !important;
+        }
       `,
     });
 
@@ -266,6 +276,23 @@ export async function generatePDF(reportId, params, log = console.log) {
       const organizationNameEl = document.getElementById('organization-name');
       if (organizationNameEl) {
         organizationNameEl.innerText = payload.organizationNameText;
+      }
+
+      // Resize each Highcharts instance to fill its container width.
+      // offsetWidth is unreliable for some containers — use getBoundingClientRect which
+      // returns the actual rendered width including any padding/margin adjustments.
+      if (window.Highcharts && window.Highcharts.charts) {
+        window.Highcharts.charts.forEach((chart) => {
+          if (!chart) return;
+          const container = chart.renderTo;
+          if (!container) return;
+          const parent = container.parentElement || container;
+          const rect = parent.getBoundingClientRect();
+          const targetWidth = Math.floor(rect.width);
+          if (targetWidth > 0) {
+            chart.setSize(targetWidth, chart.chartHeight, false);
+          }
+        });
       }
     }, evalPayload);
 
