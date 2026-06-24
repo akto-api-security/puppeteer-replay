@@ -82,6 +82,9 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     log(`${logPrefix} Setting up page.`);
     const page = await browser.newPage();
+    // 1440px matches a standard laptop so charts render at the same width users see on screen.
+    // The report content column is 56vw (100vw - 2*22vw), so at 1440px that's ~806px.
+    await page.setViewport({ width: 1440, height: 900 });
 
     const headers = {};
     if (accessToken) {
@@ -147,10 +150,6 @@ export async function generatePDF(reportId, params, log = console.log) {
     const urlPath = parsedReportUrl.pathname;
 
     const reportCategory = (parsedReportUrl.searchParams.get('category') || '').toUpperCase();
-    const headerFindingsLabel =
-      reportCategory === 'AGENTIC' ? 'Agentic Security Findings'
-      : reportCategory === 'ENDPOINT' ? 'Agentic Security Findings'
-      : 'API Security Findings';
 
     let expectedApiName = null;
     if (urlPath.includes('dashboard/testing/summary')) {
@@ -166,8 +165,8 @@ export async function generatePDF(reportId, params, log = console.log) {
     // all async work — including per-finding conversation fetches — is complete) instead of a blind sleep.
     // Hard cap: 5 min for agentic/endpoint (many conversation fetches), 30s for everything else.
     const API_WAIT_MS = 25000;
-    const isSlowCategory = reportCategory === 'AGENTIC' || reportCategory === 'ENDPOINT';
-    const REPORT_READY_TIMEOUT_MS = isSlowCategory ? 5 * 60 * 1000 : 5 * 1000;
+    const isSlowCategory = reportCategory === 'AGENTIC';
+    const POST_API_DELAY_MS = isSlowCategory ? 5 * 60 * 1000 : 5000;
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
@@ -228,15 +227,27 @@ export async function generatePDF(reportId, params, log = console.log) {
       log(`${logPrefix} Report content wait timed out. Continuing with PDF.`, 'error');
     }
 
+    log(`${logPrefix} Applying styles to the report page.`);
+
+    // Force all elements to preserve their background colours in print.
+    // Puppeteer's printBackground:true sets the browser "Print backgrounds" flag but
+    // individual elements still need print-color-adjust:exact to keep CSS backgrounds.
+    // This covers Polaris badges, chart fills, severity pill colours, etc.
     await page.addStyleTag({
       content: `
-        @page :first {
-          margin-top: 0px;
+        *, *::before, *::after {
+          print-color-adjust: exact !important;
+          -webkit-print-color-adjust: exact !important;
+        }
+        #report-summary .issues-severity-graph-table-container,
+        #report-summary .pie-chart {
+          transform: none !important;
+        }
+        .Polaris-Badge {
+          border: none !important;
         }
       `,
     });
-
-    log(`${logPrefix} Applying styles to the report page.`);
 
     const evalPayload = {
       organizationNameText: capitalizeFirstLetter(organizationName),
@@ -274,27 +285,33 @@ export async function generatePDF(reportId, params, log = console.log) {
       if (organizationNameEl) {
         organizationNameEl.innerText = payload.organizationNameText;
       }
+
+      // Resize each Highcharts instance to fill its container width.
+      // offsetWidth is unreliable for some containers — use getBoundingClientRect which
+      // returns the actual rendered width including any padding/margin adjustments.
+      if (window.Highcharts && window.Highcharts.charts) {
+        window.Highcharts.charts.forEach((chart) => {
+          if (!chart) return;
+          const container = chart.renderTo;
+          if (!container) return;
+          const parent = container.parentElement || container;
+          const rect = parent.getBoundingClientRect();
+          const targetWidth = Math.floor(rect.width);
+          if (targetWidth > 0) {
+            chart.setSize(targetWidth, chart.chartHeight, false);
+          }
+        });
+      }
     }, evalPayload);
 
-    const headerTemplate = `
-      <div style="-webkit-print-color-adjust: exact; background-color: #F6F6F7">
-        <div style="font-size: 12px; width: 100vw; background-color: #1E3161; color: white; height: 100%; z-index: 2;">
-          <div style="display: flex; justify-content: space-between; align-items: center; padding: 0 64px;">
-            <div>
-              <h4 style="font-weight: 600">${capitalizeFirstLetter(organizationName)} ${headerFindingsLabel}</h4>
-              <p style="font-weight: 400">${reportDate}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-
+    // No Puppeteer-injected headerTemplate. The page has its own cover page (BaseReportHeader /
+    // ThreatReportHeader) with the logo and title. Injecting a header repeats it on every page
+    // and its 90px top margin hides the cover logo on page 1.
     const pdfOptions = {
       path: tmpFile.name,
       printBackground: true,
-      displayHeaderFooter: true,
-      headerTemplate,
-      margin: { top: '90px' },
+      displayHeaderFooter: false,
+      margin: { top: '0px', right: '0px', bottom: '0px', left: '0px' },
     };
 
     await page.pdf(pdfOptions);
