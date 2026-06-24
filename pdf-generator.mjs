@@ -163,7 +163,10 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     // Attach API response listener *before* goto so we don't miss the request that runs on page load
     const API_WAIT_MS = 25000;
-    const POST_API_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+    // Agentic/endpoint reports render slowly (per-finding conversation fetch + chat render), so keep the
+    // long wait only for them; everything else (API security etc.) renders fast and needs ~10s.
+    const isSlowCategory = reportCategory === 'AGENTIC' || reportCategory === 'ENDPOINT';
+    const POST_API_DELAY_MS = isSlowCategory ? 5 * 60 * 1000 : 10 * 1000; // agentic/endpoint: 5min, else: 10s
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
