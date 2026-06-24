@@ -161,10 +161,13 @@ export async function generatePDF(reportId, params, log = console.log) {
       expectedApiName = 'fetchThreatTopNData';
     }
 
-    // Attach API response listener *before* goto so we don't miss the request that runs on page load
+    // Attach API response listener *before* goto so we don't miss the request that runs on page load.
+    // After the sentinel API responds, wait for window.__AKTO_REPORT_READY (emitted by the page once
+    // all async work — including per-finding conversation fetches — is complete) instead of a blind sleep.
+    // Hard cap: 5 min for agentic/endpoint (many conversation fetches), 30s for everything else.
     const API_WAIT_MS = 25000;
-    const isSlowCategory = reportCategory === 'AGENTIC';
-    const POST_API_DELAY_MS = isSlowCategory ? 5 * 60 * 1000 : 10000;
+    const isSlowCategory = reportCategory === 'AGENTIC' || reportCategory === 'ENDPOINT';
+    const REPORT_READY_TIMEOUT_MS = isSlowCategory ? 5 * 60 * 1000 : 5 * 1000;
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
@@ -178,8 +181,13 @@ export async function generatePDF(reportId, params, log = console.log) {
           if (url.includes(expectedApiName)) {
             clearTimeout(timeout);
             page.off('response', onResponse);
-            log(`${logPrefix} ${expectedApiName} resolved with status ${response.status()}. Waiting ${POST_API_DELAY_MS}ms for render.`);
-            await new Promise((r) => setTimeout(r, POST_API_DELAY_MS));
+            log(`${logPrefix} ${expectedApiName} resolved (status ${response.status()}). Waiting for window.__AKTO_REPORT_READY (timeout ${REPORT_READY_TIMEOUT_MS / 1000}s).`);
+            try {
+              await page.waitForFunction(() => window.__AKTO_REPORT_READY === true, { timeout: REPORT_READY_TIMEOUT_MS });
+              log(`${logPrefix} window.__AKTO_REPORT_READY received. Proceeding to PDF.`);
+            } catch (e) {
+              log(`${logPrefix} Timed out waiting for window.__AKTO_REPORT_READY. Proceeding anyway.`, 'error');
+            }
             resolve();
           }
         };
