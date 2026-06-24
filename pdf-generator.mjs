@@ -163,7 +163,8 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     // Attach API response listener *before* goto so we don't miss the request that runs on page load
     const API_WAIT_MS = 25000;
-    const POST_API_DELAY_MS = 5000;
+    const isSlowCategory = reportCategory === 'AGENTIC';
+    const POST_API_DELAY_MS = isSlowCategory ? 5 * 60 * 1000 : 10000;
     let apiWaitPromise = null;
     if (expectedApiName) {
       log(`${logPrefix} Will wait for ${expectedApiName} API (listener attached before navigation).`);
