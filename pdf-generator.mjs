@@ -7,6 +7,9 @@ import puppeteer from 'puppeteer';
 import tmp from 'tmp';
 import * as ReportProgress from './ReportProgress.mjs';
 
+const LOG_LEVEL = (process.env.LOG_LEVEL || 'info').toLowerCase();
+const isDebug = LOG_LEVEL === 'debug';
+
 const PUPPETEER_ARGS = [
   '--no-sandbox',
   '--disable-gpu',
@@ -58,6 +61,8 @@ export async function generatePDF(reportId, params, log = console.log) {
 
   // Searchable tag for all network logs from this run
   const NET = `[NET][${reportId}]`;
+  // Only emits when LOG_LEVEL=debug
+  const debugLog = (msg, key) => { if (isDebug) log(msg, key); };
 
   try {
     if (!reportUrl) {
@@ -98,7 +103,7 @@ export async function generatePDF(reportId, params, log = console.log) {
       await page.setExtraHTTPHeaders(headers);
     }
 
-    log(`${NET} Extra headers sent by Puppeteer: ${JSON.stringify(Object.keys(headers).reduce((acc, k) => {
+    debugLog(`${NET} Extra headers sent by Puppeteer: ${JSON.stringify(Object.keys(headers).reduce((acc, k) => {
       // redact token values to keep logs readable but show which headers are present
       acc[k] = k.toLowerCase().includes('cookie') || k.toLowerCase().includes('authorization') || k.toLowerCase() === 'access-token'
         ? `${String(headers[k]).substring(0, 12)}...[redacted]`
@@ -122,7 +127,7 @@ export async function generatePDF(reportId, params, log = console.log) {
         return acc;
       }, {});
       const postData = req.postData();
-      log(`${NET} REQ ${req.method()} ${req.url()} headers=${JSON.stringify(sanitizedHeaders)}${postData ? ` body=${postData.substring(0, 300)}` : ''}`);
+      debugLog(`${NET} REQ ${req.method()} ${req.url()} headers=${JSON.stringify(sanitizedHeaders)}${postData ? ` body=${postData.substring(0, 300)}` : ''}`);
     });
 
     page.on('response', async (resp) => {
@@ -136,14 +141,14 @@ export async function generatePDF(reportId, params, log = console.log) {
         const text = await resp.text();
         bodySnippet = text.substring(0, 500);
       } catch (_) {}
-      log(`${NET} RES ${resp.status()} ${url} latency=${latencyMs}ms headers=${JSON.stringify(respHeaders)} body=${bodySnippet}`);
+      debugLog(`${NET} RES ${resp.status()} ${url} latency=${latencyMs}ms headers=${JSON.stringify(respHeaders)} body=${bodySnippet}`);
     });
 
     page.on('requestfailed', (req) => {
       const startTime = requestStartTimes.get(req.url());
       const latencyMs = startTime ? Date.now() - startTime : -1;
       requestStartTimes.delete(req.url());
-      log(`${NET} FAILED ${req.method()} ${req.url()} latency=${latencyMs}ms reason=${req.failure()?.errorText}`, 'error');
+      debugLog(`${NET} FAILED ${req.method()} ${req.url()} latency=${latencyMs}ms reason=${req.failure()?.errorText}`, 'error');
     });
 
     const parsedReportUrl = new URL(resolvedUrl);
@@ -197,7 +202,7 @@ export async function generatePDF(reportId, params, log = console.log) {
     log(`${logPrefix} Opening report url - ${resolvedUrl}.`);
     const navStart = Date.now();
     const response = await page.goto(resolvedUrl, { waitUntil: 'networkidle2', timeout: 60000 });
-    log(`${NET} PAGE_LOAD ${resolvedUrl} status=${response?.status()} latency=${Date.now() - navStart}ms`);
+    debugLog(`${NET} PAGE_LOAD ${resolvedUrl} status=${response?.status()} latency=${Date.now() - navStart}ms`);
 
     if (response && !response.ok()) {
       log(`${logPrefix} Navigation failed: ${response.status()} ${response.statusText()}`, 'error');
