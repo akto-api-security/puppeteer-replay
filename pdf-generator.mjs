@@ -185,9 +185,9 @@ export async function generatePDF(reportId, params, log = console.log) {
           if (url.includes(expectedApiName)) {
             clearTimeout(timeout);
             page.off('response', onResponse);
-            log(`${logPrefix} ${expectedApiName} resolved (status ${response.status()}). Waiting for window.__AKTO_REPORT_READY (timeout ${REPORT_READY_TIMEOUT_MS / 1000}s).`);
+            log(`${logPrefix} ${expectedApiName} resolved (status ${response.status()}). Waiting for window.__AKTO_REPORT_READY (timeout ${POST_API_DELAY_MS / 1000}s).`);
             try {
-              await page.waitForFunction(() => window.__AKTO_REPORT_READY === true, { timeout: REPORT_READY_TIMEOUT_MS });
+              await page.waitForFunction(() => window.__AKTO_REPORT_READY === true, { timeout: POST_API_DELAY_MS });
               log(`${logPrefix} window.__AKTO_REPORT_READY received. Proceeding to PDF.`);
             } catch (e) {
               log(`${logPrefix} Timed out waiting for window.__AKTO_REPORT_READY. Proceeding anyway.`, 'error');
