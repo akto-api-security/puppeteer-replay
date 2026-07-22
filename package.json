@@ -9,12 +9,12 @@
     "start": "node test.mjs"
   },
   "dependencies": {
-    "@puppeteer/replay": "^2.7.1",
+    "@puppeteer/replay": "^4.0.2",
     "dotenv": "^16.4.7",
-    "mongodb": "^6.14.0",
-    "otpauth": "^9.4.1",
-    "puppeteer": "^19.4.1",
-    "tmp": "^0.2.5"
+    "mongodb": "^7.5.0",
+    "otpauth": "^9.5.1",
+    "puppeteer": "^25.3.0",
+    "tmp": "^0.2.7"
   },
   "browserslist": [
     "> 1%",

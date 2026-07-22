@@ -68,7 +68,7 @@ async function runReplay(replayJSON, command, replayOptions = {}) {
       (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
 
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true,
       ...(executablePath ? { executablePath } : {}),
       ignoreDefaultArgs: ['--enable-automation'],
       args: [

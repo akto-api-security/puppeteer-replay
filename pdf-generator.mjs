@@ -80,7 +80,7 @@ export async function generatePDF(reportId, params, log = console.log) {
 
     tmpFile = tmp.fileSync({ postfix: '.pdf', keep: true });
     browser = await puppeteer.launch({
-      headless: 'new',
+      headless: true,
       dumpio: true,
       args: PUPPETEER_ARGS,
     });
