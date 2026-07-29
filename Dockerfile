@@ -1,3 +1,12 @@
+# Build and run this image with --platform linux/amd64. Puppeteer downloads
+# its own Chrome build below, and Chrome for Testing has no linux-arm64
+# artifact (only linux64/x64, mac-arm64, mac-x64, win32, win64 — see
+# https://googlechromelabs.github.io/chrome-for-testing/). On arm64 hosts
+# (e.g. Apple Silicon) a native build still ends up fetching the x64 binary,
+# which then fails at runtime with "rosetta error: failed to open elf at
+# /lib64/ld-linux-x86-64.so.2" because a native arm64 container has no x64
+# emulation layer. --platform linux/amd64 makes Docker run the whole
+# container under emulation (QEMU/Rosetta) so the x64 Chrome binary works.
 FROM ubuntu:26.04
 
 # Puppeteer's own downloaded Chrome build lives here regardless of which
