@@ -10,7 +10,7 @@ COPY ./ /usr/app
 FROM alpine
 
 # Installs latest Chromium package.
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && apk add --no-cache \
       chromium \
       nss \
       freetype \
