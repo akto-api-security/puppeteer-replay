@@ -17,7 +17,8 @@ RUN apk upgrade --no-cache && apk add --no-cache \
       harfbuzz \
       ca-certificates \
       ttf-freefont \
-      nodejs
+      'nodejs>=24.22.1' \
+      'brotli-libs>=1.2.1'
 
 # Tell Puppeteer to skip installing Chrome. We'll be using the installed package.
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
