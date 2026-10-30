@@ -4,6 +4,7 @@ RUN apk add --no-cache nodejs npm
 
 WORKDIR /usr/app
 COPY package.json package-lock.json ./
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm install
 COPY ./ /usr/app
 
